@@ -1,0 +1,5 @@
+#!/bin/sh
+# Fall back to the default MoonBit install location if moon is not on PATH.
+command -v moon >/dev/null 2>&1 || export PATH="$PATH:$HOME/.moon/bin"
+
+moon check
