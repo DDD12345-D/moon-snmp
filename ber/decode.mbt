@@ -34,6 +34,12 @@ fn decode_at(bytes : BytesView, offset : Int) -> (BerValue, Int) raise BerError 
     0x05 => decode_null(body)
     0x06 => BerValue::ObjectIdentifier(decode_oid(body))
     0x30 => decode_sequence(body, start)
+    0x40 => BerValue::IpAddress(decode_ip_address(body))
+    0x41 => BerValue::Counter32(decode_uint32(body))
+    0x42 => BerValue::Gauge32(decode_uint32(body))
+    0x43 => BerValue::TimeTicks(decode_uint32(body))
+    0x44 => BerValue::Opaque(body.to_owned())
+    0x46 => BerValue::Counter64(decode_uint64(body))
     _ => raise BerError::UnknownTag(tag)
   }
   (value, 1 + length_octets + content_len)
@@ -93,6 +99,60 @@ fn decode_integer(body : BytesView) -> Int raise BerError {
   let mut i = 0
   while i < n {
     value = (value << 8) | (body.at(i).to_uint().reinterpret_as_int() & 0xFF)
+    i = i + 1
+  }
+  value
+}
+
+///|
+/// Decode the 4-octet contents of an IpAddress (RFC 2578 §7.1.5). The
+/// width is fixed by the MIB definition, so a different length is
+/// malformed rather than merely unusual.
+fn decode_ip_address(body : BytesView) -> Bytes raise BerError {
+  if body.length() != 4 {
+    raise BerError::MalformedContent
+  }
+  body.to_owned()
+}
+
+///|
+/// Decode an unsigned 32-bit application value (Counter32, Gauge32,
+/// TimeTicks). These never carry a sign octet, so the raw octets are
+/// the value; up to four of them are legal, and a leading 0x00 is
+/// tolerated because some agents pad. Anything wider cannot fit.
+fn decode_uint32(body : BytesView) -> UInt raise BerError {
+  let n = body.length()
+  if n == 0 {
+    raise BerError::Truncated
+  }
+  if n > 4 {
+    // A leading zero octet is the only way five octets could still fit,
+    // but RFC 2578 fixes the range at four, so reject rather than guess.
+    raise BerError::IntegerOverflow
+  }
+  let mut value : UInt = 0
+  let mut i = 0
+  while i < n {
+    value = (value << 8) | body.at(i).to_uint()
+    i = i + 1
+  }
+  value
+}
+
+///|
+/// Decode an unsigned 64-bit Counter64 (RFC 2578 §7.1.10).
+fn decode_uint64(body : BytesView) -> UInt64 raise BerError {
+  let n = body.length()
+  if n == 0 {
+    raise BerError::Truncated
+  }
+  if n > 8 {
+    raise BerError::IntegerOverflow
+  }
+  let mut value : UInt64 = 0
+  let mut i = 0
+  while i < n {
+    value = (value << 8) | body.at(i).to_uint64()
     i = i + 1
   }
   value

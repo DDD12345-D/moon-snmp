@@ -16,6 +16,25 @@ const TAG_OID : Int = 0x06
 const TAG_SEQUENCE : Int = 0x30
 
 ///|
+/// Application-class tags for the SNMP-specific types (RFC 2578 §7.1).
+const TAG_IP_ADDRESS : Int = 0x40
+
+///|
+const TAG_COUNTER32 : Int = 0x41
+
+///|
+const TAG_GAUGE32 : Int = 0x42
+
+///|
+const TAG_TIMETICKS : Int = 0x43
+
+///|
+const TAG_OPAQUE : Int = 0x44
+
+///|
+const TAG_COUNTER64 : Int = 0x46
+
+///|
 /// Encode a value as a complete BER TLV (tag, length, value).
 ///
 /// SMNP uses the definite short form wherever it fits and the definite
@@ -39,6 +58,12 @@ fn BerValue::tag(self : BerValue) -> Int {
     Null => TAG_NULL
     ObjectIdentifier(_) => TAG_OID
     Sequence(_) => TAG_SEQUENCE
+    IpAddress(_) => TAG_IP_ADDRESS
+    Counter32(_) => TAG_COUNTER32
+    Gauge32(_) => TAG_GAUGE32
+    TimeTicks(_) => TAG_TIMETICKS
+    Opaque(_) => TAG_OPAQUE
+    Counter64(_) => TAG_COUNTER64
   }
 }
 
@@ -57,6 +82,16 @@ fn BerValue::encode_body(self : BerValue) -> Array[Byte] {
       }
       out
     }
+    // The application types below are unsigned: RFC 2578 §7.1 defines
+    // them as non-negative, so no sign octet is ever needed and a value
+    // whose top bit is set keeps its full width instead of gaining a
+    // leading zero the way a signed INTEGER would.
+    IpAddress(b) => encode_ip_address(b)
+    Counter32(n) => encode_uint(n.to_uint64())
+    Gauge32(n) => encode_uint(n.to_uint64())
+    TimeTicks(n) => encode_uint(n.to_uint64())
+    Opaque(b) => b.to_array()
+    Counter64(n) => encode_uint(n)
   }
 }
 
@@ -96,6 +131,38 @@ fn encode_integer(n : Int) -> Array[Byte] {
     out.push(le[i].to_byte())
   }
   out
+}
+
+///|
+/// Encode an unsigned value in the minimal number of octets. Unlike the
+/// signed INTEGER case there is no sign octet: a value whose top bit is
+/// set keeps its full width.
+fn encode_uint(n : UInt64) -> Array[Byte] {
+  let out : Array[Byte] = []
+  if n == 0 {
+    out.push(0x00)
+    return out
+  }
+  let le : Array[Int] = []
+  let mut v = n
+  while v != 0 {
+    le.push((v & 0xFF).to_int())
+    v = v >> 8
+  }
+  let mut i = le.length()
+  while i > 0 {
+    i = i - 1
+    out.push(le[i].to_byte())
+  }
+  out
+}
+
+///|
+/// Encode an IpAddress. RFC 2578 §7.1.5 fixes it at exactly four
+/// octets; anything else is a caller error rather than a wire error, so
+/// it encodes as-is and the decoder rejects it.
+fn encode_ip_address(b : Bytes) -> Array[Byte] {
+  b.to_array()
 }
 
 ///|
