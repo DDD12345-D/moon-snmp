@@ -209,3 +209,77 @@ pub fn snmp_out_pkts() -> @oid.Oid {
 pub fn mib2() -> @oid.Oid {
   lit("1.3.6.1.2.1")
 }
+
+///|
+/// snmpTrapOID.0, 1.3.6.1.6.3.1.1.4.1.0 — the OID that identifies what
+/// a v2c notification is about. RFC 3416 §4.2.6 requires it to be the
+/// second var-bind of a TrapV2 or InformRequest, right after
+/// sysUpTime.0.
+pub fn snmp_trap_oid() -> @oid.Oid {
+  lit("1.3.6.1.6.3.1.1.4.1.0")
+}
+
+///|
+/// snmpTrapEnterprise.0, 1.3.6.1.6.3.1.1.4.3.0 — the enterprise that
+/// defined a vendor-specific trap, when the notification is not one of
+/// the generic ones.
+pub fn snmp_trap_enterprise() -> @oid.Oid {
+  lit("1.3.6.1.6.3.1.1.4.3.0")
+}
+
+///|
+/// The `snmpTraps` group root, 1.3.6.1.6.3.1.1.5 — the well-known trap
+/// OIDs the standard defines (coldStart, warmStart, linkDown, ...).
+pub fn snmp_traps() -> @oid.Oid {
+  lit("1.3.6.1.6.3.1.1.5")
+}
+
+///|
+/// coldStart, 1.3.6.1.6.3.1.1.5.1: the agent is re-initialising and its
+/// configuration may have changed.
+pub fn cold_start() -> @oid.Oid {
+  lit("1.3.6.1.6.3.1.1.5.1")
+}
+
+///|
+/// warmStart, 1.3.6.1.6.3.1.1.5.2: the agent is re-initialising but its
+/// configuration is unchanged.
+pub fn warm_start() -> @oid.Oid {
+  lit("1.3.6.1.6.3.1.1.5.2")
+}
+
+///|
+/// linkDown, 1.3.6.1.6.3.1.1.5.3: an interface left the up state. The
+/// first var-bind is normally ifIndex.
+pub fn link_down() -> @oid.Oid {
+  lit("1.3.6.1.6.3.1.1.5.3")
+}
+
+///|
+/// linkUp, 1.3.6.1.6.3.1.1.5.4: an interface entered the up state. The
+/// first var-bind is normally ifIndex.
+pub fn link_up() -> @oid.Oid {
+  lit("1.3.6.1.6.3.1.1.5.4")
+}
+
+///|
+/// authenticationFailure, 1.3.6.1.6.3.1.1.5.5: a request arrived that
+/// claimed an unknown community, or otherwise failed authentication.
+pub fn authentication_failure() -> @oid.Oid {
+  lit("1.3.6.1.6.3.1.1.5.5")
+}
+
+///|
+/// The v1 generic-trap codes (RFC 1157 §4.1.6). In a v1 trap these
+/// travel as small integers rather than as OIDs; a v2c receiver
+/// translates them to the OIDs above.
+pub fn v1_generic_trap_oid(generic : Int) -> @oid.Oid? {
+  match generic {
+    0 => Some(cold_start())
+    1 => Some(warm_start())
+    2 => Some(link_down())
+    3 => Some(link_up())
+    4 => Some(authentication_failure())
+    _ => None
+  }
+}
