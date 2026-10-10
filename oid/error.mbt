@@ -13,4 +13,7 @@ pub suberror OidError {
   InvalidSecondComponent(UInt)
   /// A component does not fit in an unsigned 32-bit subidentifier.
   ComponentOverflow
-}
+} derive(@debug.Debug)
+
+///|
+pub extend OidError with @debug.Debug::{to_repr}

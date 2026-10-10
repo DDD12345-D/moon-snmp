@@ -16,7 +16,10 @@ pub suberror PduError {
   MalformedBulkPdu
   /// The underlying BER layer rejected the bytes.
   Ber(@ber.BerError)
-}
+} derive(@debug.Debug)
+
+///|
+pub extend PduError with @debug.Debug::{to_repr}
 
 ///|
 /// The SNMP protocol version carried in the message header.

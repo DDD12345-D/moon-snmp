@@ -19,4 +19,7 @@ pub suberror BerError {
   /// The content of a value did not match its tag (for example an odd
   /// number of hex digits, or a non-zero padding byte).
   MalformedContent
-}
+} derive(@debug.Debug)
+
+///|
+pub extend BerError with @debug.Debug::{to_repr}
