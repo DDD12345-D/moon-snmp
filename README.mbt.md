@@ -12,9 +12,9 @@ so far.
 | `oid` | done | Object identifiers: parse/build dotted-decimal text, render it back, compare numerically the way `walk` requires, and test subtree membership. |
 | `ber` | done | BER encode/decode for the ASN.1 subset SNMP uses: the universal types (INTEGER, OCTET STRING, NULL, OBJECT IDENTIFIER, SEQUENCE), the SNMP application types (IpAddress, Counter32, Gauge32, TimeTicks, Opaque, Counter64), the v2c exception values, and an explicit-tag form for the PDU headers. |
 | `pdu` | done | SNMP messages and PDUs for v1 and v2c: versions, the nine PDU types, error-status codes, var-binds, and the encode/decode of `SEQUENCE { version, community, PDU }`. |
-| `transport` | done | A synchronous UDP transport for the JavaScript backend, plus the datagram and error types. The socket lives in a node worker thread behind a `SharedArrayBuffer`, so `send`/`recv` block the way a request/reply client wants. |
-| `session` | done | The v1/v2c client: a session owns the agent address, community, version and the request-id counter; `get`, `get_many`, `get_next`, `get_bulk`, `set`, and `walk` / `walk_bulk` for whole subtrees. Handles timeouts, retries and stray replies. |
-| `mib` | done | MIB-II OID constants (system, interfaces, ifTable columns, ip/udp/tcp, snmp) and value formatting: TimeTicks as `1:07:55.67`, interface status/type enums, IP and MAC addresses, and hex for non-printable byte strings. |
+| `transport` | done | A synchronous UDP transport for the JavaScript backend, plus the datagram and error types. Each socket gets its own worker thread behind a `SharedArrayBuffer`, so `send`/`recv` block the way a request/reply client wants and a process can hold several sockets. |
+| `session` | done | Both halves of the conversation. As a client: `get`, `get_many`, `get_next`, `get_bulk`, `set`, and `walk` / `walk_bulk` for whole subtrees, with timeout, retry and stray-reply handling. As an agent: `trap_v1`, `trap_v2`, `inform`, and a `Receiver` that listens, checks the community and acknowledges informs. |
+| `mib` | done | Well-known OIDs (MIB-II groups and scalars, the ifTable columns, the snmpTraps group) and value formatting: TimeTicks as `1:07:55.67`, interface status/type enums, IP and MAC addresses, and hex for non-printable byte strings. |
 
 ## Example
 
@@ -90,6 +90,70 @@ fn system_group() -> Unit raise {
 1.3.6.1.2.1.1.5.0 = "testbox"
 1.3.6.1.2.1.1.9.1.2.1 = OID: 1.3.6.1.6.3.10.3.1.1
 ```
+
+## Notifications
+
+The other direction: an agent telling a manager that something
+happened. Receive them:
+
+```mbt nocheck
+///|
+fn listen() -> Unit raise {
+  // A receiver needs its own socket: a client querying an agent
+  // would hold another.
+  let socket = @transport.Transport::open(162, 3000)
+  let receiver = @session.Receiver::new(socket, Some(b"public"))
+  while true {
+    let n = receiver.recv(5000) catch {
+      // Nothing arrived in the window; keep listening.
+      @session.SnmpError::NoResponse => continue
+      e => raise e
+    }
+    println(
+      "\{n.source_addr} says \{match n.trap_oid() {
+        Some(o) => o.to_dotted()
+        None => "?"
+      }}",
+    )
+    for vb in n.varbinds() {
+      println("  \{vb.name.to_dotted()} = \{@mib.format_value(vb.value)}")
+    }
+  }
+}
+```
+
+Send them:
+
+```mbt nocheck
+///|
+fn report() -> Unit raise {
+  let socket = @transport.Transport::open(0, 3000)
+  let session = @session.Session::new(
+    socket,
+    "manager.example.com",
+    162,
+    @pdu.V2c,
+    b"public",
+    3000,
+    2,
+    1000,
+  )
+  // Fire-and-forget: `NoResponse` here means the send failed, not that
+  // nobody listened.
+  session.trap_v2(123456, @mib.link_down(), [
+    @pdu.VarBind::new(@mib.if_descr(), @ber.BerValue::OctetString(b"eth0")),
+  ])
+  // An inform is acknowledged, so this one waits — and retries.
+  let ack = session.inform(124000, @mib.warm_start(), [])
+  println("acknowledged with \{ack.length()} varbind(s)")
+  socket.close()
+}
+```
+
+A trap is unacknowledged by design; an inform exists to be
+acknowledged, and that is why only the inform waits. A v1 trap travels
+as version 0 whatever the session is set to, because a v1 trap body in
+a v2c message is not a valid combination.
 
 ## Development
 
