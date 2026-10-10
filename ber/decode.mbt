@@ -46,6 +46,13 @@ fn decode_at(bytes : BytesView, offset : Int) -> (BerValue, Int) raise BerError 
     _ =>
       if (tag & 0x20) != 0 {
         BerValue::Tagged(tag, decode_sequence_items(body))
+      } else if tag >= 0x80 && tag <= 0x82 && body.length() == 0 {
+        // The SNMPv2 exceptions (RFC 3416 §4.2.1): noSuchObject
+        // (0x80), noSuchInstance (0x81) and endOfMibView (0x82) are
+        // context-class *primitive* tags with no content. A GET for an
+        // OID the agent does not have returns one of these in place of
+        // a value, so they must decode rather than raise.
+        BerValue::Tagged(tag, [])
       } else {
         raise BerError::UnknownTag(tag)
       }

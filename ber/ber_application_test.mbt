@@ -113,3 +113,34 @@ test "application types reject malformed widths" {
     }
   }
 }
+
+///|
+test "the SNMPv2 exceptions decode and round-trip" {
+  // RFC 3416 §4.2.1: a v2c agent answers a GET for something it does
+  // not have with one of these three context-class primitive tags,
+  // zero-length. They are values, not error statuses, so the decoder
+  // has to accept them.
+  let no_such_object = @ber.BerValue::decode(unhex("8000"))
+  inspect(Repr(no_such_object), content="Tagged(128, [])")
+  let no_such_instance = @ber.BerValue::decode(unhex("8100"))
+  inspect(Repr(no_such_instance), content="Tagged(129, [])")
+  let end_of_mib_view = @ber.BerValue::decode(unhex("8200"))
+  inspect(Repr(end_of_mib_view), content="Tagged(130, [])")
+  // Each one must survive an encode/decode round trip byte for byte.
+  inspect(hex(no_such_object.encode()), content="8000")
+  inspect(hex(no_such_instance.encode()), content="8100")
+  inspect(hex(end_of_mib_view.encode()), content="8200")
+}
+
+///|
+test "a context-class primitive tag with content is still rejected" {
+  // 0x80 with a non-empty body is not one of the exceptions, so it is
+  // an unknown primitive tag rather than a silently coerced value.
+  try {
+    let _ = @ber.BerValue::decode(unhex("800101"))
+    fail("expected decode failure")
+  } catch {
+    @ber.BerError::UnknownTag(_) => ()
+    e => fail("expected UnknownTag, got \{Repr(e)}")
+  }
+}
