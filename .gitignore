@@ -6,3 +6,7 @@ target
 .moonagent/prompts/
 prompts/
 pkg.generated.mbti
+# Local-only harnesses and recorded session bytes: deliberately not
+# committed, so the repo carries only the library and its tests.
+_scratch/
+fixtures/
