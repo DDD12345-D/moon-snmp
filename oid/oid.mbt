@@ -92,6 +92,14 @@ pub fn Oid::to_dotted(self : Oid) -> String {
 }
 
 ///|
+/// The subidentifiers, in order. Exposed read-only so the BER codec can
+/// pack them without re-parsing; the array is copied to keep `Oid`
+/// immutable in effect.
+pub fn Oid::parts(self : Oid) -> Array[UInt] {
+  self.parts.copy()
+}
+
+///|
 /// Compare two OIDs the way SNMP orders them: subidentifier by
 /// subidentifier as unsigned numbers, and a proper prefix sorts first
 /// (X.690 §8.19.4; this is the ordering `walk` relies on).
