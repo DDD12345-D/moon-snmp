@@ -159,3 +159,25 @@ test "equality" {
   inspect(a == b, content="true")
   inspect(a != c, content="true")
 }
+
+///|
+test "is_prefix_of recognises subtrees" {
+  let system = @oid.Oid::parse("1.3.6.1.2.1.1")
+  let sys_descr = @oid.Oid::parse("1.3.6.1.2.1.1.1.0")
+  let sys_name = @oid.Oid::parse("1.3.6.1.2.1.1.5.0")
+  let if_descr = @oid.Oid::parse("1.3.6.1.2.1.2.2.1.2.1")
+
+  inspect(system.is_prefix_of(sys_descr), content="true")
+  inspect(system.is_prefix_of(sys_name), content="true")
+  // A different group is not under it.
+  inspect(system.is_prefix_of(if_descr), content="false")
+  // An OID is a prefix of itself, which `walk` relies on to accept the
+  // root's own instance as the first entry.
+  inspect(system.is_prefix_of(system), content="true")
+  // The reverse never holds for a proper prefix.
+  inspect(sys_descr.is_prefix_of(system), content="false")
+  // It is not a plain string-prefix test: 1.3.6.1.2.1.11 is not under
+  // 1.3.6.1.2.1.1 even though its text starts with those digits.
+  let snmp = @oid.Oid::parse("1.3.6.1.2.1.11")
+  inspect(system.is_prefix_of(snmp), content="false")
+}

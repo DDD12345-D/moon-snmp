@@ -100,6 +100,25 @@ pub fn Oid::parts(self : Oid) -> Array[UInt] {
 }
 
 ///|
+/// Whether `self` is a prefix of `other`, i.e. `other` is inside the
+/// subtree rooted at `self`. An OID is a prefix of itself, so
+/// `is_prefix_of(self, self)` is true. This is the test `walk` uses to
+/// decide it has stepped outside the subtree it was asked about.
+pub fn Oid::is_prefix_of(self : Oid, other : Oid) -> Bool {
+  if self.parts.length() > other.parts.length() {
+    return false
+  }
+  let mut i = 0
+  while i < self.parts.length() {
+    if self.parts[i] != other.parts[i] {
+      return false
+    }
+    i = i + 1
+  }
+  true
+}
+
+///|
 /// Compare two OIDs the way SNMP orders them: subidentifier by
 /// subidentifier as unsigned numbers, and a proper prefix sorts first
 /// (X.690 §8.19.4; this is the ordering `walk` relies on).
