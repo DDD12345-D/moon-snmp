@@ -17,7 +17,10 @@ fn reply_message(
 /// Parse an OID written as `"1, 3, 6, 1"` or `"1.3.6.1"`. Tests read
 /// better with the literal arcs spelled out than with an array of
 /// numbers, but `Oid::parse` only takes the dotted form.
-fn oid(text : String) -> @oid.Oid raise @oid.OidError {
+///
+/// Aborts on a typo in the literal rather than threading `raise`
+/// through every call site: `test` blocks cannot declare `raise`.
+fn oid(text : String) -> @oid.Oid {
   let out : Array[String] = []
   let mut current = ""
   for c in text {
@@ -33,7 +36,9 @@ fn oid(text : String) -> @oid.Oid raise @oid.OidError {
   if current != "" {
     out.push(current)
   }
-  @oid.Oid::parse(out.join("."))
+  @oid.Oid::parse(out.join(".")) catch {
+    _ => abort("bad OID literal in test: \{text}")
+  }
 }
 
 ///|
@@ -42,7 +47,7 @@ fn reply_octet_string(
   request_id : Int,
   dotted : String,
   text : String,
-) -> Bytes raise @oid.OidError {
+) -> Bytes {
   reply_message(
     request_id,
     [
