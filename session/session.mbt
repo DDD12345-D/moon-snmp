@@ -85,12 +85,28 @@ pub fn[T : Transport] Session::request(
   self : Session[T],
   pdu : @pdu.Pdu,
 ) -> Array[@pdu.VarBind] raise SnmpError {
+  self.request_versioned(self.version, pdu)
+}
+
+///|
+/// The request loop, with an explicit version.
+///
+/// The version normally comes from the session, but a notification
+/// pins its own: a v1 trap must travel in a v1 message (version 0) and
+/// an inform only exists in v2c, no matter what the session is set to.
+/// Sending either in the wrong version produces a message no receiver
+/// should accept.
+pub fn[T : Transport] Session::request_versioned(
+  self : Session[T],
+  version : @pdu.Version,
+  pdu : @pdu.Pdu,
+) -> Array[@pdu.VarBind] raise SnmpError {
   let request_id = self.take_request_id()
   // The caller builds the PDU with a placeholder id; the session is the
   // one that owns the counter, so it stamps the real id in here. This
   // keeps `Pdu::request` free of session state.
   let message = @pdu.Message::new(
-    self.version,
+    version,
     self.community,
     with_request_id(pdu, request_id),
   )
