@@ -6,31 +6,47 @@
 /// event loop keeps delivering packets. Callers only see
 /// open / send / recv / close, so a future native implementation can
 /// back the same interface.
+///
+/// Each `Transport` owns its own socket, so a process can hold several:
+/// a client querying an agent needs one, and a receiver listening for
+/// that agent's traps needs another.
 pub struct Transport {
+  /// The registry slot of this socket. Opaque to callers.
+  handle : Int
   /// The port the OS chose, or the one requested.
   local_port : Int
 }
 
 ///|
 /// Open a UDP socket. `bind_port` of 0 asks the OS for an ephemeral
-/// port, which is what a manager wants.
+/// port, which is what a client wants; a trap receiver passes the port
+/// it should listen on.
 ///
 /// Waits up to `bind_timeout_ms` for the socket to bind, because node
 /// binds asynchronously and the worker must be ready before the first
-/// send.
+/// send. Binding the same port twice raises `NotOpen` rather than
+/// silently sharing, so a receiver can tell that its port is taken.
 pub fn Transport::open(
   bind_port : Int,
   bind_timeout_ms : Int,
 ) -> Transport raise TransportError {
-  js_udp_open(bind_port)
-  let port = js_udp_wait_bound(bind_timeout_ms)
-  if port < 0 {
+  js_udp_registry()
+  let handle = js_udp_open(bind_port)
+  if handle < 0 {
     raise TransportError::UnsupportedPlatform
   }
-  if port == 0 {
+  let port = js_udp_wait_bound(handle, bind_timeout_ms)
+  if port < 0 {
+    // The socket reported an error, most often EADDRINUSE. Close it so
+    // the worker does not linger.
+    js_udp_close(handle)
     raise TransportError::NotOpen
   }
-  { local_port: port, }
+  if port == 0 {
+    js_udp_close(handle)
+    raise TransportError::Timeout
+  }
+  { handle, local_port: port, }
 }
 
 ///|
@@ -47,8 +63,7 @@ pub fn Transport::send(
   port : Int,
   payload : Bytes,
 ) -> Unit raise TransportError {
-  let _ = self
-  let sent = js_udp_send(payload, host, port)
+  let sent = js_udp_send(self.handle, payload, host, port)
   if sent < 0 {
     raise TransportError::SendFailed("send returned \{sent}")
   }
@@ -59,27 +74,29 @@ pub fn Transport::send(
 /// `TransportError::Timeout` if nothing arrives in time.
 ///
 /// Datagrams from any source are returned; the session layer is what
-/// decides whether a reply belongs to its request.
+/// decides whether a reply belongs to its request, and a receiver is
+/// what decides whether a notification is acceptable.
 pub fn Transport::recv(
   self : Transport,
   timeout_ms : Int,
 ) -> Datagram raise TransportError {
-  let _ = self
-  let n = js_udp_recv(timeout_ms)
+  let n = js_udp_recv(self.handle, timeout_ms)
   if n < 0 {
     raise TransportError::NotOpen
   }
   if n == 0 {
     raise TransportError::Timeout
   }
-  let data = js_udp_take()
-  let from_port = js_udp_from_port()
-  { from_addr: "", from_port, data, }
+  // Read the origin before `take` frees the slot, so the address and
+  // the payload are guaranteed to describe the same datagram.
+  let from_addr = js_udp_from_addr(self.handle)
+  let from_port = js_udp_from_port(self.handle)
+  let data = js_udp_take(self.handle)
+  { from_addr, from_port, data, }
 }
 
 ///|
-/// Release the socket and stop the worker. Safe to call more than once.
+/// Release the socket and stop its worker. Safe to call more than once.
 pub fn Transport::close(self : Transport) -> Unit {
-  let _ = self
-  js_udp_close()
+  js_udp_close(self.handle)
 }

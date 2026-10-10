@@ -20,11 +20,11 @@ pub(all) suberror TransportError {
 ///|
 /// What a receive returned.
 pub(all) struct Datagram {
-  /// The sender's address, as dotted decimal. The JS bridge does not
-  /// currently report it, so this is empty; matching a reply to its
-  /// request uses the port and the request id instead.
+  /// The sender's address, as dotted decimal. A trap receiver reports
+  /// this as the notification's origin, so it is worth having.
   from_addr : String
-  /// The sender's port.
+  /// The sender's port. A receiver replying to an inform sends back to
+  /// this port.
   from_port : Int
   /// The payload.
   data : Bytes

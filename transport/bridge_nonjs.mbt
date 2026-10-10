@@ -14,19 +14,26 @@
 fn[T] panic_unimplemented() -> T = "%panic"
 
 ///|
-fn js_udp_open(bind_port : Int) -> Unit {
+fn js_udp_registry() -> Unit {
+  panic_unimplemented()
+}
+
+///|
+fn js_udp_open(bind_port : Int) -> Int {
   let _ = bind_port
   panic_unimplemented()
 }
 
 ///|
-fn js_udp_wait_bound(ms : Int) -> Int {
+fn js_udp_wait_bound(handle : Int, ms : Int) -> Int {
+  let _ = handle
   let _ = ms
   panic_unimplemented()
 }
 
 ///|
-fn js_udp_send(payload : Bytes, host : String, port : Int) -> Int {
+fn js_udp_send(handle : Int, payload : Bytes, host : String, port : Int) -> Int {
+  let _ = handle
   let _ = payload
   let _ = host
   let _ = port
@@ -34,22 +41,32 @@ fn js_udp_send(payload : Bytes, host : String, port : Int) -> Int {
 }
 
 ///|
-fn js_udp_recv(ms : Int) -> Int {
+fn js_udp_recv(handle : Int, ms : Int) -> Int {
+  let _ = handle
   let _ = ms
   panic_unimplemented()
 }
 
 ///|
-fn js_udp_take() -> Bytes {
+fn js_udp_take(handle : Int) -> Bytes {
+  let _ = handle
   panic_unimplemented()
 }
 
 ///|
-fn js_udp_from_port() -> Int {
+fn js_udp_from_port(handle : Int) -> Int {
+  let _ = handle
   panic_unimplemented()
 }
 
 ///|
-fn js_udp_close() -> Unit {
+fn js_udp_from_addr(handle : Int) -> String {
+  let _ = handle
+  panic_unimplemented()
+}
+
+///|
+fn js_udp_close(handle : Int) -> Unit {
+  let _ = handle
   panic_unimplemented()
 }
