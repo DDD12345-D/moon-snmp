@@ -10,8 +10,8 @@ so far.
 | Package | Status | What it does |
 | --- | --- | --- |
 | `oid` | done | Object identifiers: parse/build dotted-decimal text, render it back, and compare numerically the way `walk` requires. |
-| `ber` | done | BER encode/decode for the ASN.1 subset SNMP uses (INTEGER, OCTET STRING, NULL, OBJECT IDENTIFIER, SEQUENCE). |
-| `pdu` | todo | SNMP message and PDU structures (GetRequest, GetNextRequest, Response, SetRequest, Trap, GetBulkRequest). |
+| `ber` | done | BER encode/decode for the ASN.1 subset SNMP uses: the universal types (INTEGER, OCTET STRING, NULL, OBJECT IDENTIFIER, SEQUENCE), the SNMP application types (IpAddress, Counter32, Gauge32, TimeTicks, Opaque, Counter64), and an explicit-tag form for the PDU headers. |
+| `pdu` | done | SNMP messages and PDUs for v1 and v2c: versions, the nine PDU types, error-status codes, var-binds, and the encode/decode of `SEQUENCE { version, community, PDU }`. |
 | `session` | todo | UDP transport and the request/response exchange. |
 | `mib` | todo | Common MIB values and formatting helpers. |
 
