@@ -1,0 +1,8 @@
+import {
+  "moonbitlang/core/builtin",
+  "moonbitlang/core/debug",
+}
+
+options(
+  targets: { "bridge_js.mbt": [ "js" ], "bridge_nonjs.mbt": [ "not", "js" ] },
+)
