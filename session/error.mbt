@@ -1,5 +1,9 @@
 ///|
 /// Errors the client layer can report.
+///
+/// `derive(Debug)` so a caller can put one in a log line. The variant
+/// names are the stable part; the payloads are whatever the lower layer
+/// reported.
 pub suberror SnmpError {
   /// Every attempt timed out. The agent is down, unreachable, or (for a
   /// bad community in v1/v2c) deliberately silent per RFC 1157 §4.1.
@@ -12,7 +16,10 @@ pub suberror SnmpError {
   AgentError(@pdu.ErrorStatus, Int)
   /// A BER or PDU level failure while decoding the reply.
   Malformed(@pdu.PduError)
-}
+} derive(@debug.Debug)
+
+///|
+pub extend SnmpError with @debug.Debug::{to_repr}
 
 ///|
 /// The synchronous transport a session drives. `Transport` implements
