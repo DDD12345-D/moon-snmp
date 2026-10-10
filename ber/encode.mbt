@@ -64,6 +64,7 @@ fn BerValue::tag(self : BerValue) -> Int {
     TimeTicks(_) => TAG_TIMETICKS
     Opaque(_) => TAG_OPAQUE
     Counter64(_) => TAG_COUNTER64
+    Tagged(tag, _) => tag
   }
 }
 
@@ -92,6 +93,13 @@ fn BerValue::encode_body(self : BerValue) -> Array[Byte] {
     TimeTicks(n) => encode_uint(n.to_uint64())
     Opaque(b) => b.to_array()
     Counter64(n) => encode_uint(n)
+    Tagged(_, items) => {
+      let out : Array[Byte] = []
+      for item in items {
+        out.append(item.encode().to_array())
+      }
+      out
+    }
   }
 }
 

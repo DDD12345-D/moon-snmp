@@ -40,7 +40,15 @@ fn decode_at(bytes : BytesView, offset : Int) -> (BerValue, Int) raise BerError 
     0x43 => BerValue::TimeTicks(decode_uint32(body))
     0x44 => BerValue::Opaque(body.to_owned())
     0x46 => BerValue::Counter64(decode_uint64(body))
-    _ => raise BerError::UnknownTag(tag)
+    // Any other constructed tag (SEQUENCE 0x30 plus the context-class
+    // PDU tags 0xA0..0xA8 and v3 header tags) decodes as a list of
+    // nested TLVs, keeping the tag byte so callers can tell them apart.
+    _ =>
+      if (tag & 0x20) != 0 {
+        BerValue::Tagged(tag, decode_sequence_items(body))
+      } else {
+        raise BerError::UnknownTag(tag)
+      }
   }
   (value, 1 + length_octets + content_len)
 }
@@ -219,6 +227,13 @@ fn decode_oid(body : BytesView) -> @oid.Oid raise BerError {
 ///|
 /// Decode the concatenated TLVs that make up a SEQUENCE body.
 fn decode_sequence(body : BytesView, base : Int) -> BerValue raise BerError {
+  let _ = base
+  BerValue::Sequence(decode_sequence_items(body))
+}
+
+///|
+/// Decode the concatenated TLVs of any constructed value's body.
+fn decode_sequence_items(body : BytesView) -> Array[BerValue] raise BerError {
   let items : Array[BerValue] = []
   let mut offset = 0
   while offset < body.length() {
@@ -226,8 +241,5 @@ fn decode_sequence(body : BytesView, base : Int) -> BerValue raise BerError {
     items.push(item)
     offset = offset + used
   }
-  // `base` is carried only so error positions could be reported relative
-  // to the outer buffer later; unused for now.
-  let _ = base
-  BerValue::Sequence(items)
+  items
 }

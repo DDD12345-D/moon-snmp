@@ -39,6 +39,12 @@ pub(all) enum BerValue {
   /// Application 6 (tag 0x46): an unsigned 64-bit counter (RFC 2578
   /// §7.1.10; there is no tag 5, which `Counter64` never reused).
   Counter64(UInt64)
+  /// A constructed value with an explicit tag byte, for the types that
+  /// sit outside the universal and SNMP application classes — the
+  /// context-class PDU tags 0xA0..0xA8 (RFC 3416 §3) and the v3 header
+  /// being the cases this library needs. The tag byte is taken as given
+  /// so callers control class and constructed bits.
+  Tagged(Int, Array[BerValue])
 } derive(Eq, @debug.Debug)
 
 ///|
