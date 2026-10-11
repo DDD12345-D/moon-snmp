@@ -129,6 +129,22 @@ fn send_suite(
   ])
   checks.ok("trap_v2 from a private enterprise sent")
 
+  // An unsigned value whose top bit is set. It has to travel with a
+  // leading zero octet to stay non-negative, and the receiver has to
+  // read it back as the large number it is rather than as minus one —
+  // which is a bug this harness caught on the way in.
+  traps.trap_v2(125000, @mib.authentication_failure(), [
+    @pdu.VarBind::new(
+      @oid.Oid::parse("1.3.6.1.4.1.99999.1.3.1"),
+      @ber.BerValue::Gauge32(0xFFFFFFFF),
+    ),
+    @pdu.VarBind::new(
+      @oid.Oid::parse("1.3.6.1.4.1.99999.1.3.2"),
+      @ber.BerValue::Counter32(0x80000000),
+    ),
+  ])
+  checks.ok("trap_v2 with saturated unsigned values sent")
+
   // A v1 trap: a different body shape, and version 0 on the wire.
   traps.trap_v1(
     @oid.Oid::parse("1.3.6.1.4.1.8072"),

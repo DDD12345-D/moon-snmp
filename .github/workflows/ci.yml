@@ -53,6 +53,10 @@ jobs:
       # most: that is where the transport actually works.
       - run: moon test
       - run: moon test --target js
+      # Type checking is not linking, and the examples are the only
+      # packages nothing else builds, so build them here. A broken
+      # example is a broken promise to whoever copies it.
+      - run: moon build --target js
 
   e2e-query:
     name: End to end / query
@@ -143,6 +147,11 @@ jobs:
           grep -q 'enterprises.99999.1.2.3' /tmp/trapd.log
           grep -q 'TRAP, SNMP v1' /tmp/trapd.log
           grep -q 'snmpTrapOID.0 = OID: SNMPv2-MIB::warmStart' /tmp/trapd.log
+          # A 32-bit value with the top bit set must come back as the
+          # number it is, not as a negative one: the encoder has to pad
+          # it with a leading zero octet, and this is what proves it.
+          grep -q 'enterprises.99999.1.3.1 = Gauge32: 4294967295' /tmp/trapd.log
+          grep -q 'enterprises.99999.1.3.2 = Counter32: 2147483648' /tmp/trapd.log
           # Exactly one v1 trap. A transport that lets one pending send
           # clobber another delivers a datagram twice, and a duplicate is
           # how that bug showed up on a real receiver.
