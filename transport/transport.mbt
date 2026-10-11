@@ -15,7 +15,10 @@ pub(all) suberror TransportError {
   /// Host names need no separate error: `dgram.send` resolves them in
   /// node, so an unresolvable host surfaces as a send failure.
   UnsupportedPlatform
-}
+} derive(@debug.Debug)
+
+///|
+pub extend TransportError with @debug.Debug::{to_repr}
 
 ///|
 /// What a receive returned.

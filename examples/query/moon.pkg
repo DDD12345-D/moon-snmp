@@ -1,0 +1,12 @@
+pkgtype(kind: "executable")
+
+import {
+  "moonbitlang/core/builtin",
+  "moonbitlang/core/encoding/utf8",
+  "DDD12345-D/moon-snmp/examples/common",
+  "DDD12345-D/moon-snmp/mib",
+  "DDD12345-D/moon-snmp/oid",
+  "DDD12345-D/moon-snmp/pdu",
+  "DDD12345-D/moon-snmp/session",
+  "DDD12345-D/moon-snmp/transport",
+}
