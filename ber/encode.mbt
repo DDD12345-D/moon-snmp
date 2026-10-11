@@ -142,9 +142,14 @@ fn encode_integer(n : Int) -> Array[Byte] {
 }
 
 ///|
-/// Encode an unsigned value in the minimal number of octets. Unlike the
-/// signed INTEGER case there is no sign octet: a value whose top bit is
-/// set keeps its full width.
+/// Encode an unsigned value for the SNMP application types.
+///
+/// These types are BER INTEGERs restricted to non-negative values, so the
+/// two's-complement rule applies to them as much as to a signed INTEGER:
+/// a value whose top bit is set needs a leading zero octet, or the reader
+/// sees a negative number. Counter32 4294967295 is five octets,
+/// `00 ff ff ff ff`, not four — net-snmp sends exactly that, and a
+/// four-octet form would be minus one read as two's complement.
 fn encode_uint(n : UInt64) -> Array[Byte] {
   let out : Array[Byte] = []
   if n == 0 {
@@ -156,6 +161,10 @@ fn encode_uint(n : UInt64) -> Array[Byte] {
   while v != 0 {
     le.push((v & 0xFF).to_int())
     v = v >> 8
+  }
+  // The most significant octet is the last one pushed.
+  if (le[le.length() - 1] & 0x80) != 0 {
+    out.push(0x00)
   }
   let mut i = le.length()
   while i > 0 {

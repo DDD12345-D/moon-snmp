@@ -107,11 +107,6 @@ test "decode rejects malformed input" {
      "04850000000001", // length field longer than four octets
   ]
   for hex_text in cases {
-    try {
-      let _ = @ber.BerValue::decode(unhex(hex_text))
-      fail("expected decode failure for \{hex_text}")
-    } catch {
-      _ => ()
-    }
+    expect_decode_failure(hex_text)
   }
 }

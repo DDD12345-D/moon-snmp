@@ -11,20 +11,32 @@ test "encode and decode IpAddress" {
 test "encode and decode Counter32 / Gauge32 / TimeTicks" {
   // A Counter32 of 1: tag 0x41, one octet.
   inspect(hex(@ber.BerValue::Counter32(1).encode()), content="410101")
-  // The top bit set must NOT gain a sign octet: 0x80000000 is four
-  // octets, not five (this is where treating it as a signed INTEGER
-  // would go wrong).
+  // The last value that fits in four octets as a non-negative INTEGER.
+  inspect(
+    hex(@ber.BerValue::Counter32(0x7FFFFFFF).encode()),
+    content="41047fffffff",
+  )
+  inspect(roundtrip("41047fffffff"), content="41047fffffff")
+  // Above that the top bit is set, so the value needs a leading zero to
+  // stay non-negative: five octets, not four. net-snmp encodes the
+  // saturated ifSpeed of 4294967295 exactly this way.
   inspect(
     hex(@ber.BerValue::Counter32(0x80000000).encode()),
-    content="410480000000",
+    content="41050080000000",
   )
-  inspect(roundtrip("410480000000"), content="410480000000")
-  // The maximum 32-bit counter wraps past 2^31 and still fits.
+  inspect(roundtrip("41050080000000"), content="41050080000000")
   inspect(
     hex(@ber.BerValue::Counter32(0xFFFFFFFF).encode()),
-    content="4104ffffffff",
+    content="410500ffffffff",
   )
-  inspect(roundtrip("4104ffffffff"), content="4104ffffffff")
+  inspect(roundtrip("410500ffffffff"), content="410500ffffffff")
+  // A four-octet spelling of the same value is what an agent that does
+  // not pad would send; it decodes to the same number and re-encodes in
+  // the padded form.
+  inspect(roundtrip("4104ffffffff"), content="410500ffffffff")
+  // Two leading zeros would be redundant, so that spelling is rejected
+  // rather than quietly accepted.
+  expect_decode_failure("41060000ffffffff")
 
   // Gauge32 and TimeTicks share the shape but keep their own tags.
   inspect(hex(@ber.BerValue::Gauge32(1000).encode()), content="420203e8")
@@ -45,12 +57,19 @@ test "encode and decode Counter64" {
     content="46050100000000",
   )
   inspect(roundtrip("46050100000000"), content="46050100000000")
-  // The full 64-bit range stays unsigned.
+  // The full 64-bit range needs a leading zero for the same reason: as
+  // a non-negative INTEGER, 64 bits of ones would read as minus one.
   inspect(
     hex(@ber.BerValue::Counter64(0xFFFFFFFFFFFFFFFF).encode()),
-    content="4608ffffffffffffffff",
+    content="460900ffffffffffffffff",
   )
-  inspect(roundtrip("4608ffffffffffffffff"), content="4608ffffffffffffffff")
+  inspect(roundtrip("460900ffffffffffffffff"), content="460900ffffffffffffffff")
+  inspect(roundtrip("4608ffffffffffffffff"), content="460900ffffffffffffffff")
+  // The largest value that needs no padding.
+  inspect(
+    hex(@ber.BerValue::Counter64(0x7FFFFFFFFFFFFFFF).encode()),
+    content="46087fffffffffffffff",
+  )
 }
 
 ///|
@@ -75,6 +94,12 @@ test "application types decode to the right variant" {
       )
     _ => fail("expected IpAddress")
   }
+  // Both spellings of the same value decode to it: the padded five-octet
+  // form net-snmp sends, and the four-octet form another agent may use.
+  match @ber.BerValue::decode(unhex("41050080000000")) {
+    Counter32(n) => inspect(n, content="2147483648")
+    _ => fail("expected Counter32")
+  }
   match @ber.BerValue::decode(unhex("410480000000")) {
     Counter32(n) => inspect(n, content="2147483648")
     _ => fail("expected Counter32")
@@ -82,6 +107,10 @@ test "application types decode to the right variant" {
   match @ber.BerValue::decode(unhex("4304075bcd15")) {
     TimeTicks(n) => inspect(n, content="123456789")
     _ => fail("expected TimeTicks")
+  }
+  match @ber.BerValue::decode(unhex("460900ffffffffffffffff")) {
+    Counter64(n) => inspect(n, content="18446744073709551615")
+    _ => fail("expected Counter64")
   }
   match @ber.BerValue::decode(unhex("4608ffffffffffffffff")) {
     Counter64(n) => inspect(n, content="18446744073709551615")
@@ -95,22 +124,34 @@ test "application types decode to the right variant" {
 
 ///|
 test "application types reject malformed widths" {
-  let cases : Array[String] = [
-    "4003c0a801", // IpAddress with 3 octets
-     "4005c0a8010101", // IpAddress with 5 octets
-     "41050000000001", // Counter32 wider than 4 octets
-     "42050000000001", // Gauge32 wider than 4 octets
-     "4309000000000000000001", // Counter64 wider than 8
-     "4100", // empty Counter32
-     "4600", // empty Counter64
-  ]
-  for hex_text in cases {
-    try {
-      let _ = @ber.BerValue::decode(unhex(hex_text))
-      fail("expected decode failure for \{hex_text}")
-    } catch {
-      _ => ()
-    }
+  // IpAddress is exactly four octets, and the counters have a fixed
+  // range the content must fit in.
+  expect_decode_failure("4003c0a801") // IpAddress with 3 octets
+  expect_decode_failure("4005c0a8010101") // IpAddress with 5 octets
+  expect_decode_failure("4100") // empty Counter32
+  expect_decode_failure("4600") // empty Counter64
+  // Leading zeros beyond the one a non-negative value needs are
+  // redundant, so the content is not minimally encoded.
+  expect_decode_failure("41050000000001")
+  expect_decode_failure("42050000000001")
+  expect_decode_failure("4309000000000000000001")
+  expect_decode_failure("41020001") // the zero was not needed for 1
+}
+
+///|
+/// Check that decoding `hex_text` is rejected.
+///
+/// The assertion has to happen *outside* the `try`: a `fail()` inside one
+/// is swallowed by the catch-all handler beside it, which is how this
+/// test spent several batches asserting nothing at all.
+fn expect_decode_failure(hex_text : String) -> Unit raise {
+  let decoded : @ber.BerValue? = Some(@ber.BerValue::decode(unhex(hex_text))) catch {
+    _ => None
+  }
+  match decoded {
+    None => ()
+    Some(value) =>
+      fail("expected \{hex_text} to be rejected, decoded to \{Repr(value)}")
   }
 }
 

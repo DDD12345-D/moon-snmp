@@ -140,13 +140,18 @@ fn decode_uint32(body : BytesView) -> UInt raise BerError {
   if n == 0 {
     raise BerError::Truncated
   }
-  if n > 4 {
-    // A leading zero octet is the only way five octets could still fit,
-    // but RFC 2578 fixes the range at four, so reject rather than guess.
+  // The application types are INTEGERs restricted to non-negative values,
+  // so a value with the top bit set arrives with a leading zero octet to
+  // keep it non-negative. Rejecting that, as this once did, refuses a
+  // perfectly legal message: net-snmp encodes ifSpeed 4294967295 exactly
+  // that way, so walking the interface table failed on the one interface
+  // reporting a saturated link speed.
+  let first = first_content_octet(body)
+  if n - first > 4 {
     raise BerError::IntegerOverflow
   }
   let mut value : UInt = 0
-  let mut i = 0
+  let mut i = first
   while i < n {
     value = (value << 8) | body.at(i).to_uint()
     i = i + 1
@@ -161,16 +166,37 @@ fn decode_uint64(body : BytesView) -> UInt64 raise BerError {
   if n == 0 {
     raise BerError::Truncated
   }
-  if n > 8 {
+  // Same rule as the 32-bit case.
+  let first = first_content_octet(body)
+  if n - first > 8 {
     raise BerError::IntegerOverflow
   }
   let mut value : UInt64 = 0
-  let mut i = 0
+  let mut i = first
   while i < n {
     value = (value << 8) | body.at(i).to_uint64()
     i = i + 1
   }
   value
+}
+
+///|
+/// Where the value starts in a non-negative INTEGER-shaped content.
+///
+/// Zero is one octet, and a value whose top bit is set carries exactly
+/// one leading zero octet so that it stays non-negative. That single zero
+/// is accepted; any other leading zero is redundant, which X.690 §8.3.2
+/// does not allow, and is rejected rather than quietly accepted so that a
+/// malformed frame is still noticed.
+fn first_content_octet(body : BytesView) -> Int raise BerError {
+  let n = body.length()
+  if n == 1 || body.at(0) != 0x00 {
+    return 0
+  }
+  if (body.at(1).to_uint() & 0x80) == 0 {
+    raise BerError::MalformedContent
+  }
+  1
 }
 
 ///|
