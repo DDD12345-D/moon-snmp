@@ -28,6 +28,16 @@ runs:
         fi
         echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
 
+    - name: Refresh the registry index
+      shell: bash
+      run: |
+        export PATH="$HOME/.moon/bin:$PATH"
+        # The module depends on a package from mooncakes, and the index —
+        # whether it came from the cache or from a fresh install — can
+        # predate it. Without this, resolving the dependency fails with
+        # "module was not found in the registry" even though it exists.
+        moon update
+
     - name: Show the version
       shell: bash
       run: |
