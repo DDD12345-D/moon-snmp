@@ -66,6 +66,12 @@ fn js_udp_from_addr(handle : Int) -> String {
 }
 
 ///|
+fn js_udp_dropped(handle : Int) -> Int {
+  let _ = handle
+  panic_unimplemented()
+}
+
+///|
 fn js_udp_close(handle : Int) -> Unit {
   let _ = handle
   panic_unimplemented()

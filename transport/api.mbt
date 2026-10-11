@@ -96,6 +96,18 @@ pub fn Transport::recv(
 }
 
 ///|
+/// How many datagrams this socket has dropped: ones larger than the
+/// receive buffer, and ones that arrived with the queue already full.
+///
+/// A receiver should check this the way it checks its protocol-level
+/// reject counter. Both failure modes look like silence otherwise, and
+/// "I am losing traps" is exactly the thing a monitoring library must
+/// not hide.
+pub fn Transport::dropped_datagrams(self : Transport) -> Int {
+  js_udp_dropped(self.handle)
+}
+
+///|
 /// Release the socket and stop its worker. Safe to call more than once.
 pub fn Transport::close(self : Transport) -> Unit {
   js_udp_close(self.handle)
