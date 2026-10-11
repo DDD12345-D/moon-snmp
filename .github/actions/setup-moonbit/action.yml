@@ -1,0 +1,35 @@
+name: Set up the MoonBit toolchain
+description: Installs the MoonBit compiler and build tool, with a cache.
+
+# The install script is the documented way to get MoonBit on Linux
+# (https://cli.moonbitlang.com/install/unix.sh). It lands everything in
+# ~/.moon, which is what gets cached, so a warm cache skips it.
+
+runs:
+  using: composite
+  steps:
+    - name: Cache the toolchain and its registry
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.moon
+          ~/.mooncakes
+        # A static key: the toolchain is only used to build and test this
+        # repository, and a stale compiler is a smaller problem than a
+        # cache that misses on every run. Bump it to force a refresh.
+        key: moonbit-${{ runner.os }}-v1
+
+    - name: Install MoonBit if it is not already there
+      shell: bash
+      run: |
+        export PATH="$HOME/.moon/bin:$PATH"
+        if [ ! -x "$HOME/.moon/bin/moon" ]; then
+          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+        fi
+        echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
+
+    - name: Show the version
+      shell: bash
+      run: |
+        export PATH="$HOME/.moon/bin:$PATH"
+        moon version

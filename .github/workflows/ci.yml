@@ -1,0 +1,192 @@
+name: CI
+
+# Five checks. The first three are the project's own bar — no warnings,
+# every test green, formatting stable — and the last two drive a real
+# net-snmp implementation over a real socket, because a protocol library
+# that only agrees with itself proves nothing.
+#
+# The end-to-end jobs build one throwaway image from `e2e/docker` and
+# run it twice: once as the agent, once as the notification receiver.
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  # The image the end-to-end jobs use, built from e2e/docker.
+  E2E_IMAGE: moon-snmp-e2e
+  # Where the agent is published on the runner, and the port the query
+  # harness looks for by default.
+  AGENT_PORT: 16161
+  # The same for the notification receiver.
+  TRAP_PORT: 16162
+
+jobs:
+  format:
+    name: Formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-moonbit
+      - run: moon fmt --check
+
+  check:
+    name: Types
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-moonbit
+      # Warnings are errors here on purpose: a warning that is allowed
+      # to stay is a warning nobody reads.
+      - run: moon check --deny-warn
+
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-moonbit
+      # The tests are written against injected fakes, so they need no
+      # socket and run on either backend. The JavaScript one matters
+      # most: that is where the transport actually works.
+      - run: moon test
+      - run: moon test --target js
+
+  e2e-query:
+    name: End to end / query
+    runs-on: ubuntu-latest
+    needs: [test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-moonbit
+
+      - name: Build the agent image
+        run: docker build -t "$E2E_IMAGE" e2e/docker
+
+      - name: Start the agent
+        run: |
+          docker run -d --name agent -p "$AGENT_PORT":161/udp "$E2E_IMAGE"
+          # Wait until it answers rather than sleeping a guessed amount,
+          # so a slow runner does not turn into a flaky failure. snmpget
+          # comes from the same image, which also proves the image works.
+          for i in $(seq 1 30); do
+            # From inside a container the published port lives on the
+            # host, so this must not use 127.0.0.1 — that would be the
+            # probe container talking to itself.
+            if docker run --rm --add-host=host.docker.internal:host-gateway \
+                 "$E2E_IMAGE" snmpget -v 2c -c public -t 1 -r 0 \
+                 "host.docker.internal:$AGENT_PORT" 1.3.6.1.2.1.1.1.0 \
+                 >/dev/null 2>&1; then
+              echo "agent is answering"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "agent never answered" >&2
+          docker logs agent >&2
+          exit 1
+
+      - name: Run the query suite against it
+        run: moon run e2e/query --target js -- 127.0.0.1 "$AGENT_PORT"
+
+      - name: Cross-check the walk against net-snmp
+        # Our own suite cannot tell "walked the whole subtree" from
+        # "stopped early and was happy about it", so compare the count
+        # with the reference implementation's.
+        run: |
+          ours=$(moon run e2e/query --target js -- 127.0.0.1 "$AGENT_PORT" \
+            | sed -n 's/^walk system: \([0-9]*\) entries$/\1/p')
+          theirs=$(docker run --rm --add-host=host.docker.internal:host-gateway \
+            "$E2E_IMAGE" snmpwalk -v 2c -c public -t 2 -r 1 \
+            "host.docker.internal:$AGENT_PORT" 1.3.6.1.2.1.1 | wc -l)
+          echo "ours=$ours net-snmp=$theirs"
+          test -n "$ours"
+          test "$ours" -eq "$theirs"
+
+      - name: Stop the agent
+        if: always()
+        run: docker rm -f agent || true
+
+  e2e-notify:
+    name: End to end / notifications
+    runs-on: ubuntu-latest
+    needs: [test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-moonbit
+
+      - name: Build the image
+        run: docker build -t "$E2E_IMAGE" e2e/docker
+
+      - name: Loopback regression check
+        # No docker: five notifications from one socket to another in
+        # one process, back to back. This is what catches a transport
+        # that drops or duplicates datagrams under a burst.
+        run: moon run e2e/notify --target js -- loopback
+
+      - name: Send notifications to a real receiver
+        # --add-host is what makes host.docker.internal resolve on a
+        # Linux runner; Docker Desktop provides it for free.
+        run: |
+          docker run -d --name trapd -p "$TRAP_PORT":162/udp "$E2E_IMAGE" \
+            snmptrapd -f -Lo -n
+          sleep 2
+          moon run e2e/notify --target js -- send 127.0.0.1 "$TRAP_PORT"
+          sleep 1
+          docker logs trapd 2>&1 | tee /tmp/trapd.log
+
+          # snmptrapd's own log is the evidence: it understood each shape
+          # rather than merely receiving bytes.
+          grep -q 'snmpTrapOID.0 = OID: IF-MIB::linkDown' /tmp/trapd.log
+          grep -q 'enterprises.99999.1.2.3' /tmp/trapd.log
+          grep -q 'TRAP, SNMP v1' /tmp/trapd.log
+          grep -q 'snmpTrapOID.0 = OID: SNMPv2-MIB::warmStart' /tmp/trapd.log
+          # Exactly one v1 trap. A transport that lets one pending send
+          # clobber another delivers a datagram twice, and a duplicate is
+          # how that bug showed up on a real receiver.
+          test "$(grep -c 'TRAP, SNMP v1' /tmp/trapd.log)" -eq 1
+          docker rm -f trapd
+
+      - name: Receive notifications from a real sender
+        # The receiver has to be listening while snmptrap runs, and a
+        # background process does not outlive the shell that started it,
+        # so the whole conversation happens in one step.
+        run: |
+          moon run e2e/notify --target js -- recv "$TRAP_PORT" 3 \
+            > /tmp/recv.log 2>&1 &
+          recv=$!
+          for i in $(seq 1 60); do
+            grep -q "listening on" /tmp/recv.log && break
+            sleep 1
+          done
+          grep -q "listening on" /tmp/recv.log
+
+          addr="host.docker.internal:$TRAP_PORT"
+          host=(--add-host=host.docker.internal:host-gateway)
+
+          docker run --rm "${host[@]}" "$E2E_IMAGE" \
+            snmptrap -v 2c -c public "$addr" '' 1.3.6.1.6.3.1.1.5.1
+
+          docker run --rm "${host[@]}" "$E2E_IMAGE" \
+            snmptrap -v 1 -c public "$addr" \
+            1.3.6.1.4.1.8072 192.0.2.55 6 4321 '' \
+            1.3.6.1.4.1.8072.9999.1 s "from-net-snmp"
+
+          # An inform, which our receiver must acknowledge. snmptrap
+          # exits non-zero if the acknowledgement never comes, so the
+          # exit status is the check.
+          docker run --rm "${host[@]}" "$E2E_IMAGE" \
+            snmptrap -v 2c -c public -Ci "$addr" '' 1.3.6.1.6.3.1.1.5.2
+
+          wait $recv
+          cat /tmp/recv.log
+          # It must have understood the v1 trap, not merely counted it:
+          # 1.3.6.1.4.1.8072.0.4321 is the RFC 2576 translation of
+          # enterprise 8072 with specific code 4321.
+          grep -q '1.3.6.1.4.1.8072.0.4321' /tmp/recv.log
+
+      - name: Clean up
+        if: always()
+        run: docker rm -f trapd agent || true
