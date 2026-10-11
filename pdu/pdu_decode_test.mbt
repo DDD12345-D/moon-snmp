@@ -196,11 +196,23 @@ test "decode rejects malformed messages" {
      "302902010104067075626c6963a21c02044a4d5a5a020113020101300e300c06082b060102010101000500",
   ]
   for hex_text in cases {
-    try {
-      let _ = @pdu.Message::decode(unhex(hex_text))
-      fail("expected decode failure for \{hex_text}")
-    } catch {
-      _ => ()
-    }
+    expect_diagnostic(hex_text)
+  }
+}
+
+///|
+/// Check that a frame is rejected.
+///
+/// The assertion has to happen *outside* the `try`: a `fail()` inside one
+/// is swallowed by the catch-all handler beside it, which is how this
+/// list spent several batches asserting nothing at all.
+fn expect_diagnostic(hex_text : String) -> Unit raise {
+  let decoded : @pdu.Message? = Some(@pdu.Message::decode(unhex(hex_text))) catch {
+    _ => None
+  }
+  match decoded {
+    None => ()
+    Some(message) =>
+      fail("expected \{hex_text} to be rejected, got \{Repr(message)}")
   }
 }

@@ -21,6 +21,11 @@ license = "Apache-2.0"
 
 keywords = [ "snmp", "network-management", "protocol", "ber" ]
 
-preferred_target = "wasm"
+// Every layer but the transport compiles for any backend, but anything
+// that opens a socket only works on JavaScript (see transport). Making
+// that the default means `moon run examples/query` just works, instead
+// of failing with a stub panic because the caller forgot a flag.
 
-description = "Pure MoonBit implementation of the SNMP protocol client (v1, v2c, v3)"
+preferred_target = "js"
+
+description = "Pure MoonBit implementation of the SNMP protocol client (v1, v2c)"
