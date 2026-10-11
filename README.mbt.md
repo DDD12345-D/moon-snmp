@@ -14,6 +14,7 @@ so far.
 | `pdu` | done | SNMP messages and PDUs for v1 and v2c: versions, the nine PDU types, error-status codes, var-binds, and the encode/decode of `SEQUENCE { version, community, PDU }`. |
 | `transport` | done | A synchronous UDP transport for the JavaScript backend, plus the datagram and error types. Each socket gets its own worker thread behind a `SharedArrayBuffer`, so `send`/`recv` block the way a request/reply client wants and a process can hold several sockets. |
 | `session` | done | Both halves of the conversation. As a client: `get`, `get_many`, `get_next`, `get_bulk`, `set`, and `walk` / `walk_bulk` for whole subtrees, with timeout, retry and stray-reply handling. As an agent: `trap_v1`, `trap_v2`, `inform`, and a `Receiver` that listens, checks the community and acknowledges informs. |
+| `snmpv3` | done | SNMPv3 messages (RFC 3412) and the User-based Security Model (RFC 3414): engine discovery, key localization, HMAC-MD5-96 / HMAC-SHA-96 authentication, and AES-128 privacy (RFC 3826). DES is deliberately absent. |
 | `mib` | done | Well-known OIDs (MIB-II groups and scalars, the ifTable columns, the snmpTraps group) and value formatting: TimeTicks as `1:07:55.67`, interface status/type enums, IP and MAC addresses, and hex for non-printable byte strings. |
 
 ## Examples
@@ -88,6 +89,49 @@ listening on udp/162 for community "public"
     what      1.3.6.1.6.3.1.1.5.2
     reply     acknowledged
 ```
+
+## SNMPv3
+
+v3 replaces the community with a user, and adds authentication and
+privacy. A client has to discover the agent's engine id and clock before
+it can authenticate anything — the keys are derived from the engine id,
+and an authenticator is only accepted if the clock is close to the
+agent's.
+
+```mbt nocheck
+///|
+fn read_over_v3() -> Unit raise {
+  let socket = @transport.Transport::open(0, 3000)
+  let security : @snmpv3.Security = {
+    level: @snmpv3.AuthPriv,
+    user: b"monitor",
+    auth_protocol: @snmpv3.Sha1,
+    auth_password: b"authpass",
+    priv_protocol: @snmpv3.Aes128,
+    priv_password: b"privpass",
+  }
+  // Discovery runs on the first request, so building a client cannot
+  // fail on a network problem.
+  let client = @session.V3Client::new(
+    socket,
+    "192.0.2.10",
+    161,
+    security,
+    3000,
+    2,
+  )
+  let vb = client.get(@mib.sys_name())
+  println("\{client.engine().id.length()} octet engine id")
+  println(@mib.format_value(vb.value))
+  socket.close()
+}
+```
+
+Changing the password to something wrong gives `SnmpError::Security`
+rather than silence, and `@snmpv3.report_meaning(oid)` says which counter
+the agent incremented — a wrong digest, an unknown user, or a clock too
+far out of step. `examples/trap_listener` stays v2c; the v3 suite in
+`e2e/v3query` is the worked example for this.
 
 ## Notifications
 
