@@ -16,7 +16,11 @@ so far.
 | `session` | done | Both halves of the conversation. As a client: `get`, `get_many`, `get_next`, `get_bulk`, `set`, and `walk` / `walk_bulk` for whole subtrees, with timeout, retry and stray-reply handling. As an agent: `trap_v1`, `trap_v2`, `inform`, and a `Receiver` that listens, checks the community and acknowledges informs. |
 | `mib` | done | Well-known OIDs (MIB-II groups and scalars, the ifTable columns, the snmpTraps group) and value formatting: TimeTicks as `1:07:55.67`, interface status/type enums, IP and MAC addresses, and hex for non-printable byte strings. |
 
-## Example
+## Examples
+
+Each layer is usable on its own: `ber` and `oid` have no idea what SNMP
+is, `pdu` knows the messages but not the network, `transport` knows the
+network but not the protocol.
 
 ```mbt nocheck
 ///|
@@ -30,99 +34,66 @@ test "build and render sysDescr.0" {
 }
 ```
 
-Querying an agent over UDP (JavaScript target only, for now):
+Three complete programs under [`examples/`](examples), each runnable
+against a real device. They need the JavaScript target, which is the
+module default, so no flag is required.
 
-```mbt nocheck
-///|
-fn sys_descr() -> String raise {
-  let transport = @transport.Transport::open(0, 3000)
-  let session = @session.Session::new(
-    transport,
-    "127.0.0.1",
-    161,
-    @pdu.V2c,
-    b"public",
-    3000, // ms per attempt
-    2, // retries
-    1000, // first request id
-  )
-  let vb = session.get(@oid.Oid::parse("1.3.6.1.2.1.1.1.0"))
-  transport.close()
-  match vb.value {
-    @ber.BerValue::OctetString(b) => @utf8.decode_lossy(b)
-    other => Repr(other).to_string()
-  }
-}
+| Program | What it shows |
+| --- | --- |
+| `examples/query` | `get_many` — read a device's identity in one round trip. |
+| `examples/walk_table` | `walk_bulk` — walk a MIB table and turn it into rows. |
+| `examples/trap_listener` | `Receiver` — listen for traps and informs. |
+
+`examples/query` against a net-snmp agent:
+
+```console
+$ moon run examples/query -- 192.0.2.10 public 161
+asking 192.0.2.10:161 as "public"
+
+sysDescr     "Linux testbox 6.1.0 x86_64"
+sysObjectID  OID: 1.3.6.1.4.1.8072.3.2.10
+sysUpTime    Timeticks: (407567) 1:07:55.67
+sysName      "testbox"
+sysContact   "dev@example.com"
+sysLocation  "Hackathon Lab"
 ```
 
-Walking a subtree, with the MIB-II constants and the value formatter:
+`examples/walk_table`, which is where a table's shape on the wire
+matters: cells arrive column-major, so a row per interface means
+regrouping them by the index in the last arc.
 
-```mbt nocheck
-///|
-fn system_group() -> Unit raise {
-  let transport = @transport.Transport::open(0, 3000)
-  let session = @session.Session::new(
-    transport,
-    "127.0.0.1",
-    161,
-    @pdu.V2c,
-    b"public",
-    3000,
-    2,
-    1000,
-  )
-  // `walk` GETs the root then iterates with GETNEXT, stopping when the
-  // agent steps outside the subtree. `walk_bulk` does the same with
-  // GETBULK, which is far fewer round trips on a large table.
-  for entry in session.walk(@mib.system(), 0) {
-    println("\{entry.name.to_dotted()} = \{@mib.format_value(entry.value)}")
-  }
-  transport.close()
-}
+```console
+$ moon run examples/walk_table -- 192.0.2.10 public 161
+ifNumber = 2
+
+index  name  type              mtu    speed    status  address
+1      lo    softwareLoopback  65536  10 Mb/s  up
+2      eth0  ethernetCsmacd    1500   >4 Gb/s  up      1e:0c:c2:25:23:94
 ```
 
-`walk` of the system group on a stock agent prints the scalars, then the
-`sysORTable` rows, when it reaches them:
+`examples/trap_listener` prints each notification it receives until it
+goes quiet:
 
-```text
-1.3.6.1.2.1.1.1.0 = "Linux testbox 6.1.0 x86_64"
-1.3.6.1.2.1.1.3.0 = Timeticks: (407567) 1:07:55.67
-1.3.6.1.2.1.1.5.0 = "testbox"
-1.3.6.1.2.1.1.9.1.2.1 = OID: 1.3.6.1.6.3.10.3.1.1
+```console
+$ moon run examples/trap_listener -- 162
+listening on udp/162 for community "public"
+
+--- 1: trap v2c from 192.0.2.10:52427
+    what      1.3.6.1.6.3.1.1.5.3
+    uptime    Timeticks: (171606) 0:28:36.06
+    values
+      1.3.6.1.2.1.1.3.0 = Timeticks: (171606) 0:28:36.06
+      1.3.6.1.6.3.1.1.4.1.0 = OID: 1.3.6.1.6.3.1.1.5.3
+--- 3: inform from 192.0.2.10:52429
+    what      1.3.6.1.6.3.1.1.5.2
+    reply     acknowledged
 ```
 
 ## Notifications
 
 The other direction: an agent telling a manager that something
-happened. Receive them:
-
-```mbt nocheck
-///|
-fn listen() -> Unit raise {
-  // A receiver needs its own socket: a client querying an agent
-  // would hold another.
-  let socket = @transport.Transport::open(162, 3000)
-  let receiver = @session.Receiver::new(socket, Some(b"public"))
-  while true {
-    let n = receiver.recv(5000) catch {
-      // Nothing arrived in the window; keep listening.
-      @session.SnmpError::NoResponse => continue
-      e => raise e
-    }
-    println(
-      "\{n.source_addr} says \{match n.trap_oid() {
-        Some(o) => o.to_dotted()
-        None => "?"
-      }}",
-    )
-    for vb in n.varbinds() {
-      println("  \{vb.name.to_dotted()} = \{@mib.format_value(vb.value)}")
-    }
-  }
-}
-```
-
-Send them:
+happened. A `Receiver` is the listening end — `examples/trap_listener`
+is that program written out.
 
 ```mbt nocheck
 ///|
@@ -154,6 +125,25 @@ A trap is unacknowledged by design; an inform exists to be
 acknowledged, and that is why only the inform waits. A v1 trap travels
 as version 0 whatever the session is set to, because a v1 trap body in
 a v2c message is not a valid combination.
+
+## References
+
+The protocol is defined by these documents, and the shape of this
+library follows them rather than any one implementation:
+
+- RFC 1157 — [A Simple Network Management Protocol](https://datatracker.ietf.org/doc/html/rfc1157) (SNMPv1, the v1 trap body).
+- RFC 3416 — [Protocol Operations for SNMPv2](https://datatracker.ietf.org/doc/html/rfc3416) (the PDUs, error statuses, the v2c exceptions, the notification var-bind order).
+- RFC 2578 — [SMIv2](https://datatracker.ietf.org/doc/html/rfc2578) (the application types and their ranges).
+- RFC 1213 — [MIB-II](https://datatracker.ietf.org/doc/html/rfc1213) (the groups `mib` names).
+- RFC 2576 — [Coexistence between SNMP versions](https://datatracker.ietf.org/doc/html/rfc2576) (the translation of a v1 trap into a trap OID).
+- X.690 — the BER encoding rules the `ber` package implements.
+
+Behaviour was checked against [net-snmp](https://www.net-snmp.org/)
+(BSD-3-Clause) as the reference implementation, and its `snmpd`,
+`snmptrapd` and `snmptrap` are what the end-to-end tests talk to. API
+shape was informed by [gosnmp](https://github.com/gosnmp/gosnmp)
+(BSD-2-Clause) and [snmpgo](https://github.com/k-sone/snmpgo)
+(MIT); neither was copied from, and no code from either is included.
 
 ## Development
 
