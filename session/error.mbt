@@ -16,6 +16,10 @@ pub suberror SnmpError {
   AgentError(@pdu.ErrorStatus, Int)
   /// A BER or PDU level failure while decoding the reply.
   Malformed(@pdu.PduError)
+  /// A v3 security failure: a bad authenticator, an engine clock out of
+  /// step, an unknown user, or a Report saying so. Only a v3 session can
+  /// produce this, and the payload says which.
+  Security(@snmpv3.V3Error)
 } derive(@debug.Debug)
 
 ///|

@@ -1,0 +1,17 @@
+import {
+  "moonbitlang/core/builtin",
+  "moonbitlang/core/debug",
+  "moonbitstack/mooncrypt/cipher/aes",
+  "moonbitstack/mooncrypt/hash/md5",
+  "moonbitstack/mooncrypt/hash/sha1",
+  "moonbitstack/mooncrypt/mac/hmac",
+  "moonbitstack/mooncrypt/spec",
+  "DDD12345-D/moon-snmp/ber",
+  "DDD12345-D/moon-snmp/oid",
+  "DDD12345-D/moon-snmp/pdu",
+}
+
+import {
+  "moonbitlang/core/encoding/utf8",
+  "DDD12345-D/moon-snmp/mib",
+} for "test"

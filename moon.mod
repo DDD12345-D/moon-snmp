@@ -28,4 +28,8 @@ keywords = [ "snmp", "network-management", "protocol", "ber" ]
 
 preferred_target = "js"
 
-description = "Pure MoonBit implementation of the SNMP protocol client (v1, v2c)"
+description = "Pure MoonBit implementation of the SNMP protocol client (v1, v2c, v3)"
+
+import {
+  "moonbitstack/mooncrypt@0.3.1",
+}

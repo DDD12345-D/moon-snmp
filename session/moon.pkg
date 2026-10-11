@@ -5,6 +5,7 @@ import {
   "DDD12345-D/moon-snmp/mib",
   "DDD12345-D/moon-snmp/oid",
   "DDD12345-D/moon-snmp/pdu",
+  "DDD12345-D/moon-snmp/snmpv3",
   "DDD12345-D/moon-snmp/transport",
 }
 

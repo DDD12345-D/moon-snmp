@@ -41,6 +41,18 @@ fn expect_integer(value : @ber.BerValue) -> Int raise PduError {
 ///|
 /// Decode a PDU from the context-class tagged value the BER layer
 /// produced.
+
+///|
+/// Decode a PDU from a BER value that is already known to be one.
+///
+/// `Message::decode` uses this internally; it is public because a v3
+/// message does not carry a PDU at the top level — it lives inside a
+/// scoped PDU, which is decoded on its own (RFC 3412 §6.2).
+pub fn Pdu::from_ber(value : @ber.BerValue) -> Pdu raise PduError {
+  decode_pdu(value)
+}
+
+///|
 fn decode_pdu(value : @ber.BerValue) -> Pdu raise PduError {
   let (tag, fields) = match value {
     @ber.BerValue::Tagged(tag, fields) => (tag, fields)
