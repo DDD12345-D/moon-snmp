@@ -169,3 +169,45 @@ The library targets the JavaScript backend: `transport` uses `node:dgram`
 through a small bridge, and the other backends get a `%panic` stub rather
 than a silent failure. Run anything that opens a socket with
 `--target js`.
+
+### End-to-end tests
+
+The unit tests inject fakes, which makes them fast and deterministic and
+also means they cannot see anything that only goes wrong over a real
+socket. `e2e/` drives a real net-snmp implementation instead:
+
+```sh
+docker build -t moon-snmp-e2e e2e/docker
+
+# Against an agent: 28 checks covering get/get_next/get_bulk, walk and
+# walk_bulk, the v2c exceptions, and a wrong community.
+docker run -d --name agent -p 16161:161/udp moon-snmp-e2e
+moon run e2e/query --target js -- 127.0.0.1 16161
+
+# Loopback: five notifications from one socket to another in one
+# process, back to back. No docker needed, and it is the check that
+# catches a transport dropping or duplicating datagrams.
+moon run e2e/notify --target js -- loopback
+
+# Sending to a real receiver, and receiving from a real sender.
+docker run -d --name trapd -p 16162:162/udp moon-snmp-e2e \
+  snmptrapd -f -Lo -n
+moon run e2e/notify --target js -- send 127.0.0.1 16162
+moon run e2e/notify --target js -- recv 16162 3
+docker run --rm --add-host=host.docker.internal:host-gateway \
+  moon-snmp-e2e snmptrap -v 2c -c public \
+  host.docker.internal:16162 '' 1.3.6.1.6.3.1.1.5.1
+```
+
+Each harness exits non-zero when a check fails, so CI reads a status
+rather than a log. `.github/workflows/ci.yml` runs these as five jobs:
+formatting, types, unit tests, and the two end-to-end suites.
+
+`e2e/docker/Dockerfile` takes its base image as a build argument, so the
+same file works on a runner with plain Docker Hub access and behind a
+network that needs a mirror:
+
+```sh
+docker build --build-arg BASE=<mirror>/library/alpine:latest \
+  -t moon-snmp-e2e e2e/docker
+```
