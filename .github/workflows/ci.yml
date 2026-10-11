@@ -95,6 +95,13 @@ jobs:
       - name: Run the query suite against it
         run: moon run e2e/query --target js -- 127.0.0.1 "$AGENT_PORT"
 
+      - name: Run the v3 suite against it
+        # The same agent, as a v3 user: discovery, then the same question
+        # at each security level. The users and passwords come from
+        # e2e/docker/snmpd.conf, so the image and the harness have to
+        # agree — which is the sort of thing a test should notice.
+        run: moon run e2e/v3query -- 127.0.0.1 "$AGENT_PORT"
+
       - name: Cross-check the walk against net-snmp
         # Our own suite cannot tell "walked the whole subtree" from
         # "stopped early and was happy about it", so compare the count
