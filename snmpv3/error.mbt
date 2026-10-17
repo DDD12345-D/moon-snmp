@@ -18,6 +18,10 @@ pub(all) suberror V3Error {
   /// A message needs a privacy key or an engine discovery that this
   /// session has not obtained.
   NotReady(String)
+  /// An authenticated message whose engine clock is outside the window
+  /// RFC 3414 §3.2 allows. Either it is a replay, or the peer restarted
+  /// and its new clock has not been learned yet.
+  OutsideTimeWindow
   /// The agent answered with a Report PDU, which is how v3 reports a
   /// security problem rather than by dropping the message. The counter
   /// is the first var-bind's value, whose OID says what went wrong.
