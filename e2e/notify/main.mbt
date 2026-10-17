@@ -497,6 +497,16 @@ fn recv_v3_suite(
           "v3 notification \{label} names the engine it was scoped to",
           info.engine_id.length() > 0,
         )
+        let context_owner = if info.context_engine_id == v3_receiver_engine().id {
+          "this receiver"
+        } else if info.context_engine_id == info.engine_id {
+          "the sending engine"
+        } else {
+          "neither"
+        }
+        println(
+          "     context engine: \{context_owner}, name \"\{@utf8.decode_lossy(info.context_name)}\"",
+        )
       }
       None =>
         checks.bad("v3 notification \{label} carries a v3 context", "missing")

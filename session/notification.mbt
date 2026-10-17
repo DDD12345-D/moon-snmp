@@ -39,6 +39,11 @@ pub(all) struct V3Notification {
   /// The message's authoritative engine: the sender for a trap, and
   /// this receiver for an inform (the sender discovered it first).
   engine_id : Bytes
+  /// The context the notification belongs to. A sender may name a
+  /// context other than the default, and a receiver that answers an
+  /// inform has to answer in the same one.
+  context_engine_id : Bytes
+  context_name : Bytes
   /// The user the message was authenticated as.
   user : Bytes
   /// The protection the sender used.

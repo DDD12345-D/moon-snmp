@@ -258,6 +258,7 @@ fn[T : Transport] Receiver::acknowledge_v3(
   dg : @transport.Datagram,
   security : @snmpv3.Security,
   message : @snmpv3.V3Message,
+  scoped : @snmpv3.ScopedPdu,
   request_id : Int,
   varbinds : Array[@pdu.VarBind],
 ) -> Unit {
@@ -284,9 +285,12 @@ fn[T : Transport] Receiver::acknowledge_v3(
     user: message.user,
     auth_params: b"",
     priv_params: b"",
+    // A Response stays in the context the request named. Echoing it
+    // rather than substituting our own is what the sender compares
+    // against.
     data: @snmpv3.Plain({
-      context_engine_id: self.v3_engine.id,
-      context_name: b"",
+      context_engine_id: scoped.context_engine_id,
+      context_name: scoped.context_name,
       pdu: @pdu.Pdu::response(request_id, @pdu.NoError, 0, varbinds),
     }),
   }
@@ -415,8 +419,7 @@ fn[T : Transport] Receiver::accept_v3_with(
       self.rejected = self.rejected + 1
       None
     }
-    @snmpv3.Plain(scoped) =>
-      self.accept_v3_pdu(dg, security, message, scoped.pdu)
+    @snmpv3.Plain(scoped) => self.accept_v3_pdu(dg, security, message, scoped)
   }
 }
 
@@ -428,8 +431,9 @@ fn[T : Transport] Receiver::accept_v3_pdu(
   dg : @transport.Datagram,
   security : @snmpv3.Security,
   message : @snmpv3.V3Message,
-  pdu : @pdu.Pdu,
+  scoped : @snmpv3.ScopedPdu,
 ) -> Notification? {
+  let pdu = scoped.pdu
   let kind = match pdu {
     @pdu.Generic(p) =>
       match p.pdu_type {
@@ -456,6 +460,7 @@ fn[T : Transport] Receiver::accept_v3_pdu(
                 dg,
                 security,
                 message,
+                scoped,
                 p.request_id,
                 p.varbinds,
               )
@@ -475,6 +480,8 @@ fn[T : Transport] Receiver::accept_v3_pdu(
         pdu,
         v3: Some({
           engine_id: message.engine.id,
+          context_engine_id: scoped.context_engine_id,
+          context_name: scoped.context_name,
           user: message.user,
           level: message.flags.level(),
         }),
