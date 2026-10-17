@@ -299,30 +299,28 @@ fn run(
   )
   println("       unknown user   -> \{stranger_outcome}")
 
-  // 9. SET over v3. `e2e-priv` is provisioned read-write in
-  //    snmpd.conf, and the agent is the one that commits the write, so
-  //    reading the value back is what proves the SetRequest arrived
-  //    intact rather than merely being accepted by our own code.
-  let contact = @mib.sys_contact()
-  let original = string_of(encrypted.get(contact))
-  let written = encrypted.set(
-    contact,
-    @ber.BerValue::OctetString(b"ops@example.org"),
+  // 9. SET over v3. `snmpEnableAuthenTraps.0` is the writable scalar in
+  //    MIB-II's snmp group, and it is *not* configured in snmpd.conf:
+  //    net-snmp makes a system-group object read-only as soon as a
+  //    config directive sets it, which is why the write is aimed here
+  //    rather than at sysContact.
+  let traps = authen_traps()
+  let before = integer_of(encrypted.get(traps))
+  checks.that(
+    "snmpEnableAuthenTraps.0 reads as an INTEGER",
+    before == 1 || before == 2,
   )
+  let flipped = if before == 1 { 2 } else { 1 }
+  let written = encrypted.set(traps, @ber.BerValue::Integer(flipped))
   checks.num("authPriv SET returns the written varbind", written.length(), 1)
-  checks.text(
+  checks.that(
     "the agent committed the write",
-    string_of(encrypted.get(contact)),
-    "ops@example.org",
+    integer_of(encrypted.get(traps)) == flipped,
   )
-  let _ = encrypted.set(
-    contact,
-    @ber.BerValue::OctetString(@utf8.encode(original)),
-  )
-  checks.text(
+  let _ = encrypted.set(traps, @ber.BerValue::Integer(before))
+  checks.that(
     "the previous value can be restored",
-    string_of(encrypted.get(contact)),
-    original,
+    integer_of(encrypted.get(traps)) == before,
   )
 
   // 10. The same write as a read-only user must be refused by the
@@ -330,7 +328,7 @@ fn run(
   //     so a client that reported success here would be inventing it.
   let mut refused = false
   try {
-    let _ = sha.set(contact, @ber.BerValue::OctetString(b"nope"))
+    let _ = sha.set(traps, @ber.BerValue::Integer(flipped))
   } catch {
     @session.SnmpError::AgentError(_, _) => refused = true
     _ => ()
@@ -416,6 +414,25 @@ fn walk_names(entries : Array[@session.WalkEntry]) -> Array[String] {
     out.push(e.name.to_dotted())
   }
   out
+}
+
+///|
+/// 1.3.6.1.2.1.11.30.0, `snmpEnableAuthenTraps.0` (RFC 1907): the one
+/// writable scalar in the snmp group, and therefore the object this
+/// suite writes to prove a SetRequest is committed.
+fn authen_traps() -> @oid.Oid {
+  @oid.Oid::parse("1.3.6.1.2.1.11.30.0") catch {
+    _ => abort("bad OID literal")
+  }
+}
+
+///|
+/// A varbind's value as an integer, or -1 when it is something else.
+fn integer_of(vb : @pdu.VarBind) -> Int {
+  match vb.value {
+    @ber.BerValue::Integer(n) => n
+    _ => -1
+  }
 }
 
 ///|
