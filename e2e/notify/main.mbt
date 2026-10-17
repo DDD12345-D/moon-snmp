@@ -14,6 +14,12 @@
 ///     Listen for `count` notifications and check each one. Point a
 ///     real sender at it with snmptrap, which is what CI does.
 ///
+/// The same two roles over v3, where the user and the engine replace the
+/// community:
+///
+///   moon run e2e/notify --target js -- send-v3 <host> <port>
+///   moon run e2e/notify --target js -- recv-v3 <port> <count>
+///
 /// Exits non-zero if any check fails.
 
 ///|
@@ -39,6 +45,55 @@ const WAIT_MS : Int = 10000
 ///|
 /// The community every notification in this harness uses.
 const COMMUNITY : Bytes = b"public"
+
+///|
+/// The v3 user, and the passwords the fixture in `e2e/docker` provisions.
+const V3_USER : Bytes = b"e2e-trap"
+
+///|
+const V3_AUTH_PASSWORD : Bytes = b"trappass"
+
+///|
+const V3_PRIV_PASSWORD : Bytes = b"trapprivpass"
+
+///|
+/// The engine this harness claims when it *sends* a trap. A trap is
+/// authoritative for the sender's engine, so the receiver has to know
+/// this id in advance — `snmptrapd.conf` carries the matching
+/// `createUser -e` line.
+const V3_SENDER_ENGINE_ID : Bytes = b"\x80\x00\x1f\x88\x04moon-snmp-trap"
+
+///|
+/// The engine this harness claims when it *receives* an inform. The
+/// sender learns it by discovery, so nothing is configured with it in
+/// advance.
+const V3_RECEIVER_ENGINE_ID : Bytes = b"\x80\x00\x1f\x88\x04moon-snmp-rcv"
+
+///|
+/// The v3 user this harness authenticates as.
+fn v3_security() -> @snmpv3.Security {
+  {
+    level: @snmpv3.AuthPriv,
+    user: V3_USER,
+    auth_protocol: @snmpv3.Sha1,
+    auth_password: V3_AUTH_PASSWORD,
+    priv_protocol: @snmpv3.Aes128,
+    priv_password: V3_PRIV_PASSWORD,
+  }
+}
+
+///|
+/// Our identity as a trap sender: a fixed engine id with a clock that
+/// does not move backwards.
+fn v3_sender_engine() -> @snmpv3.Engine {
+  { id: V3_SENDER_ENGINE_ID, boots: 1, time: 1, }
+}
+
+///|
+/// Our identity as an inform receiver.
+fn v3_receiver_engine() -> @snmpv3.Engine {
+  { id: V3_RECEIVER_ENGINE_ID, boots: 1, time: 1, }
+}
 
 ///|
 /// fn main dispatch. The mode comes first so an unknown one fails fast
@@ -75,9 +130,27 @@ fn main {
       }
       checks.finish("notify receive suite")
     }
+    "send-v3" => {
+      let host = args.text(3, DEFAULT_SEND_HOST)
+      let port = args.number(4, DEFAULT_SEND_PORT)
+      println("notify v3 send suite against \{host}:\{port}\n")
+      send_v3_suite(checks, host, port) catch {
+        e => checks.bad("the suite ran to completion", Repr(e).to_string())
+      }
+      checks.finish("notify v3 send suite")
+    }
+    "recv-v3" => {
+      let port = args.number(3, DEFAULT_RECV_PORT)
+      let wanted = args.number(4, DEFAULT_WANTED)
+      println("notify v3 receive suite on udp/\{port}, expecting \{wanted}\n")
+      recv_v3_suite(checks, port, wanted) catch {
+        e => checks.bad("the suite ran to completion", Repr(e).to_string())
+      }
+      checks.finish("notify v3 receive suite")
+    }
     _ => {
       println(
-        "usage: e2e/notify [send <host> <port> | recv <port> <count> | loopback]",
+        "usage: e2e/notify [send <host> <port> | recv <port> <count> | send-v3 <host> <port> | recv-v3 <port> <count> | loopback]",
       )
       @support.exit_with(2)
     }
@@ -301,6 +374,174 @@ fn recv_suite(checks : @support.Checks, port : Int, wanted : Int) -> Unit raise 
   println(
     "\ncounts: v2c traps \{seen_v2c}, v1 traps \{seen_v1}, informs \{seen_inform}",
   )
+  socket.close()
+}
+
+///|
+/// Send v3 notifications to a real receiver.
+///
+/// The trap can only be checked from the receiver's side, so CI greps
+/// snmptrapd's log for it. The inform is checked here: an
+/// acknowledgement means the receiver verified our signature, decrypted
+/// the message and understood it — the strongest thing this side can
+/// observe.
+fn send_v3_suite(
+  checks : @support.Checks,
+  host : String,
+  port : Int,
+) -> Unit raise {
+  let socket = @transport.Transport::open(0, 3000)
+  println("sending v3 from udp/\{socket.local_port()}")
+  let client = @session.V3Client::new(
+    socket,
+    host,
+    port,
+    v3_security(),
+    2000,
+    1,
+  )
+  client.set_local_engine(v3_sender_engine())
+
+  // A trap OID of our own, so the receiver's log line cannot be confused
+  // with the v2c suite's linkDown.
+  client.trap(131000, @oid.Oid::parse("1.3.6.1.4.1.99999.3.1"), [
+    @pdu.VarBind::new(@mib.if_descr(), @ber.BerValue::OctetString(b"eth0")),
+  ])
+  checks.ok("a v3 authPriv trap sent")
+
+  let ack = client.inform(132000, @mib.warm_start(), [
+    @pdu.VarBind::new(@mib.sys_name(), @ber.BerValue::OctetString(b"moon-snmp")),
+  ])
+  checks.num("the v3 authPriv inform was acknowledged", ack.length(), 3)
+  match ack.get(1) {
+    Some(vb) =>
+      match vb.value {
+        @ber.BerValue::ObjectIdentifier(o) =>
+          checks.text(
+            "the acknowledgement echoes the trap OID",
+            o.to_dotted(),
+            @mib.warm_start().to_dotted(),
+          )
+        _ =>
+          checks.bad(
+            "the acknowledgement echoes the trap OID", "value was not an OID",
+          )
+      }
+    None =>
+      checks.bad("the acknowledgement echoes the trap OID", "no varbind 1")
+  }
+  socket.close()
+}
+
+///|
+/// Listen for v3 notifications from a real sender.
+///
+/// A v3 trap is authoritative for the *sender's* engine, so nothing is
+/// configured here about who will call: the receiver learns the engine
+/// from the message and localizes the key for it. An inform is the
+/// other way round — the sender discovers *our* engine first — which is
+/// what `discoveries()` counts.
+fn recv_v3_suite(
+  checks : @support.Checks,
+  port : Int,
+  wanted : Int,
+) -> Unit raise {
+  let socket = @transport.Transport::open(port, 3000)
+  println("listening on udp/\{socket.local_port()}")
+  let receiver = @session.Receiver::v3(
+    socket,
+    v3_receiver_engine(),
+    v3_security(),
+  )
+  let mut got = 0
+  let mut traps = 0
+  let mut informs = 0
+  while got < wanted {
+    let notification = receiver.recv(WAIT_MS) catch {
+      @session.SnmpError::NoResponse => {
+        checks.bad(
+          "all expected v3 notifications arrived",
+          "gave up after \{got} of \{wanted}",
+        )
+        break
+      }
+      e => {
+        checks.bad("receive", Repr(e).to_string())
+        break
+      }
+    }
+    got = got + 1
+    let label = "\{got}"
+    println(
+      "\n[\{got}] \{kind_name(notification.kind)} from \{notification.source_addr}:\{notification.source_port}",
+    )
+    for vb in notification.varbinds() {
+      println("     \{vb.name.to_dotted()} = \{@mib.format_value(vb.value)}")
+    }
+    checks.that(
+      "v3 notification \{label} arrived over v3",
+      notification.version == @pdu.V3,
+    )
+    match notification.v3 {
+      Some(info) => {
+        checks.text(
+          "v3 notification \{label} names the user it authenticated as",
+          @utf8.decode_lossy(info.user),
+          @utf8.decode_lossy(V3_USER),
+        )
+        checks.that(
+          "v3 notification \{label} was authenticated and encrypted",
+          info.level == @snmpv3.AuthPriv,
+        )
+        checks.that(
+          "v3 notification \{label} names the engine it was scoped to",
+          info.engine_id.length() > 0,
+        )
+      }
+      None =>
+        checks.bad("v3 notification \{label} carries a v3 context", "missing")
+    }
+    checks.that(
+      "v3 notification \{label} names what it is about",
+      notification.trap_oid() is Some(_),
+    )
+    checks.that(
+      "v3 notification \{label} has a readable uptime",
+      notification.uptime() is Some(_),
+    )
+    match notification.kind {
+      @session.TrapV2 => {
+        traps = traps + 1
+        checks.that("v3 notification \{label} is a trap", true)
+      }
+      @session.Inform => {
+        informs = informs + 1
+        checks.that("v3 notification \{label} is an inform", true)
+        checks.num(
+          "v3 inform \{label} was acknowledged",
+          receiver.unacknowledged(),
+          0,
+        )
+      }
+      @session.TrapV1 =>
+        checks.bad(
+          "v3 notification \{label} is a v1 trap",
+          "v1 cannot travel in v3",
+        )
+    }
+  }
+  checks.num("all expected v3 notifications arrived", got, wanted)
+  checks.num("nothing was rejected", receiver.rejected(), 0)
+  checks.num("nothing was left unacknowledged", receiver.unacknowledged(), 0)
+  checks.that(
+    "the inform sender discovered our engine",
+    receiver.discoveries() >= 1,
+  )
+  checks.that(
+    "the run covered a v3 trap and a v3 inform",
+    traps > 0 && informs > 0,
+  )
+  println("\ncounts: v3 traps \{traps}, v3 informs \{informs}")
   socket.close()
 }
 

@@ -177,6 +177,53 @@ acknowledged, and that is why only the inform waits. A v1 trap travels
 as version 0 whatever the session is set to, because a v1 trap body in
 a v2c message is not a valid combination.
 
+The same two shapes go over v3, where the engine decides who is
+authoritative. A trap is scoped to the *sender's* engine, so the sender
+needs one of its own:
+
+```mbt nocheck
+///|
+fn report_over_v3() -> Unit raise {
+  let socket = @transport.Transport::open(0, 3000)
+  let security : @snmpv3.Security = {
+    level: @snmpv3.AuthPriv,
+    user: b"monitor",
+    auth_protocol: @snmpv3.Sha1,
+    auth_password: b"authpass",
+    priv_protocol: @snmpv3.Aes128,
+    priv_password: b"privpass",
+  }
+  let client = @session.V3Client::new(
+    socket,
+    "manager.example.com",
+    162,
+    security,
+    3000,
+    2,
+  )
+  // The clock must only move forward: a receiver records it and
+  // refuses a message that goes backwards.
+  let engine : @snmpv3.Engine = {
+    id: b"\x80\x00\x1f\x88\x04collector",
+    boots: 1,
+    time: 0,
+  }
+  client.set_local_engine(engine)
+  client.trap(123456, @mib.link_down(), [])
+  // An inform is scoped to the *receiver's* engine, so this discovers
+  // it first and then waits for the acknowledgement.
+  let _ = client.inform(124000, @mib.warm_start(), [])
+  socket.close()
+}
+```
+
+On the listening side, `Receiver::v3` takes the user and this engine's
+own identity. It answers discovery (that is how a sender can address an
+inform to it), verifies a trap against the *sender's* engine id taken
+from the message, and acknowledges an inform addressed to its own. A
+receiver with an empty engine id can still take traps but cannot receive
+informs: there is nothing to tell a sender.
+
 ## References
 
 The protocol is defined by these documents, and the shape of this

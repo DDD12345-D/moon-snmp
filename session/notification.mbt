@@ -29,6 +29,29 @@ pub extend NotificationKind with Eq::{not_equal, equal}
 pub extend NotificationKind with @debug.Debug::{to_repr}
 
 ///|
+/// What a v3 notification says about its security context.
+///
+/// A v1/v2c notification is identified by a community, which is a
+/// shared secret and says nothing about who sent it. A v3 one is
+/// identified by a user and authenticated against an engine, so a
+/// receiver that logs a notification should log these too.
+pub(all) struct V3Notification {
+  /// The message's authoritative engine: the sender for a trap, and
+  /// this receiver for an inform (the sender discovered it first).
+  engine_id : Bytes
+  /// The user the message was authenticated as.
+  user : Bytes
+  /// The protection the sender used.
+  level : @snmpv3.SecurityLevel
+} derive(Eq, @debug.Debug)
+
+///|
+pub extend V3Notification with Eq::{not_equal, equal}
+
+///|
+pub extend V3Notification with @debug.Debug::{to_repr}
+
+///|
 /// A notification as it arrived, with where it came from.
 ///
 /// The raw `Pdu` is kept rather than flattened into fields, because the
@@ -45,8 +68,11 @@ pub(all) struct Notification {
   /// acknowledgement.
   source_port : Int
   version : @pdu.Version
+  /// The community, for v1 and v2c; empty for v3, which has none.
   community : Bytes
   pdu : @pdu.Pdu
+  /// Who sent it, when it arrived over v3.
+  v3 : V3Notification?
 } derive(Eq, @debug.Debug)
 
 ///|
@@ -164,6 +190,19 @@ fn notification_head(
     out.push(vb)
   }
   out
+}
+
+///|
+/// The flags a notification or its acknowledgement carries: protected
+/// like the session, but never reportable. Trap and Response are
+/// unconfirmed PDUs (RFC 3412 §6.4); the reportable bit belongs to the
+/// confirmed class, and `request` sets it on the way out.
+fn notification_flags(level : @snmpv3.SecurityLevel) -> @snmpv3.MsgFlags {
+  {
+    reportable: false,
+    authenticated: level != @snmpv3.NoAuthNoPriv,
+    encrypted: level == @snmpv3.AuthPriv,
+  }
 }
 
 ///|

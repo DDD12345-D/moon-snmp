@@ -17,6 +17,7 @@ struct FakeV3Agent {
   mut wrong_id : Bool
   mut pending : Bytes?
   mut sets : Int
+  mut informs : Int
   mut next_calls : Int
   mut bulk_calls : Int
 }
@@ -30,6 +31,7 @@ fn FakeV3Agent::new(rows : Array[@session.WalkEntry]) -> FakeV3Agent {
     wrong_id: false,
     pending: None,
     sets: 0,
+    informs: 0,
     next_calls: 0,
     bulk_calls: 0,
   }
@@ -117,6 +119,12 @@ fn FakeV3Agent::answer(self : FakeV3Agent, pdu : @pdu.Pdu) -> @pdu.Pdu {
                   ])
               }
           }
+        }
+        @pdu.InformRequest => {
+          // An inform is acknowledged with a Response carrying the same
+          // request-id and the same var-binds (RFC 3416 §4.2.6).
+          self.informs = self.informs + 1
+          @pdu.Pdu::response(p.request_id, @pdu.NoError, 0, p.varbinds)
         }
         @pdu.SetRequest => {
           self.sets = self.sets + 1

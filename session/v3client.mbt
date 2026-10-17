@@ -31,6 +31,14 @@ pub struct V3Client[T] {
   mut keys : @snmpv3.Keys?
   /// The discovered engine, or the unknown engine before that.
   mut engine : @snmpv3.Engine
+  /// This client's own engine, used when it acts as a notification
+  /// originator. A trap is authoritative for the *sender's* engine, so
+  /// sending one needs an identity and a clock of our own — not the
+  /// agent's. Unknown until `set_local_engine` is called.
+  mut local_engine : @snmpv3.Engine
+  /// Keys localized to `local_engine`, cached because localization
+  /// stretches a password to a megabyte.
+  mut local_keys : @snmpv3.Keys?
   mut next_msg_id : Int
   mut next_request_id : Int
   /// The counter AES privacy needs a fresh value from for every message.
@@ -58,6 +66,8 @@ pub fn[T] V3Client::new(
     retries,
     keys: None,
     engine: @snmpv3.Engine::unknown(),
+    local_engine: @snmpv3.Engine::unknown(),
+    local_keys: None,
     next_msg_id: 1,
     next_request_id: 1,
     next_salt: 1,
@@ -397,4 +407,116 @@ pub fn[T : Transport] V3Client::walk_bulk(
   max_steps : Int,
 ) -> Array[WalkEntry] raise SnmpError {
   walk_bulk_with(v3_walk_access(self), root, max_repetitions, max_steps)
+}
+
+///|
+/// Say who this client is when it sends traps.
+///
+/// A v3 trap is authoritative for the *sender's* engine (RFC 3414 §2.4):
+/// the engine id, boots and time in the message header describe us, not
+/// the device the trap is about, and the receiver derives the user's key
+/// from that id. So an originator needs its own engine and a clock that
+/// only moves forward — a receiver records the clock and refuses a
+/// message that goes backwards.
+///
+/// The engine is supplied rather than generated: a real sender keeps it
+/// across restarts (which is what makes the receiver's replay window
+/// mean anything), and a test wants to pin it.
+pub fn[T] V3Client::set_local_engine(
+  self : V3Client[T],
+  engine : @snmpv3.Engine,
+) -> Unit {
+  self.local_engine = engine
+  self.local_keys = None
+}
+
+///|
+/// The keys for our own engine, localized once and then cached.
+fn[T] V3Client::notification_keys(
+  self : V3Client[T],
+) -> (@snmpv3.Engine, @snmpv3.Keys) raise SnmpError {
+  if self.local_engine.id.length() == 0 {
+    raise SnmpError::Security(
+      @snmpv3.V3Error::NotReady(
+        "set a local engine before sending v3 notifications",
+      ),
+    )
+  }
+  let keys = match self.local_keys {
+    Some(k) => k
+    None => {
+      let k = self.security.localize(self.local_engine.id) catch {
+        e => raise SnmpError::Security(e)
+      }
+      self.local_keys = Some(k)
+      k
+    }
+  }
+  (self.local_engine, keys)
+}
+
+///|
+/// Send a v3 trap: unacknowledged, and scoped to our own engine.
+///
+/// The var-binds are the v2c ones — `sysUpTime.0` and `snmpTrapOID.0`
+/// first, then whatever the caller adds (RFC 3416 §4.2.6) — because a
+/// v3 notification is the same PDU in a different envelope.
+pub fn[T : Transport] V3Client::trap(
+  self : V3Client[T],
+  uptime : UInt,
+  trap_oid : @oid.Oid,
+  varbinds : Array[@pdu.VarBind],
+) -> Unit raise SnmpError {
+  let (engine, keys) = self.notification_keys()
+  let message : @snmpv3.V3Message = {
+    msg_id: self.take_msg_id(),
+    msg_max_size: self.msg_max_size,
+    // A trap is unconfirmed: nothing will answer it, and a reportable
+    // bit would invite a Report from engines that have never heard of us.
+    flags: notification_flags(self.security.level),
+    security_model: @snmpv3.USM_SECURITY_MODEL,
+    engine,
+    user: self.security.user,
+    auth_params: b"",
+    priv_params: b"",
+    data: @snmpv3.Plain({
+      context_engine_id: engine.id,
+      context_name: b"",
+      pdu: @pdu.Pdu::request(
+        @pdu.TrapV2,
+        0,
+        notification_head(uptime, trap_oid, varbinds),
+      ),
+    }),
+  }
+  let wire = @snmpv3.seal(message, self.security, keys, self.take_salt()) catch {
+    e => raise SnmpError::Security(e)
+  }
+  self.transport.send(self.host, self.port, wire) catch {
+    _ => raise SnmpError::NoResponse
+  }
+}
+
+///|
+/// Send a v3 inform and wait for the receiver's acknowledgement.
+///
+/// An inform is confirmed, so its authoritative engine is the
+/// *receiver* (RFC 3414 §2.4), not us: discovery runs against it, the
+/// keys are derived from its engine id, and the Response it returns is
+/// verified like any other reply. An unreachable receiver therefore
+/// surfaces as `NoResponse` after the configured retries, which is the
+/// whole reason to use an inform instead of a trap.
+pub fn[T : Transport] V3Client::inform(
+  self : V3Client[T],
+  uptime : UInt,
+  trap_oid : @oid.Oid,
+  varbinds : Array[@pdu.VarBind],
+) -> Array[@pdu.VarBind] raise SnmpError {
+  self.request(
+    @pdu.Pdu::request(
+      @pdu.InformRequest,
+      0,
+      notification_head(uptime, trap_oid, varbinds),
+    ),
+  )
 }
