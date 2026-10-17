@@ -178,13 +178,17 @@ jobs:
           moon run e2e/notify --target js -- send-v3 127.0.0.1 "$TRAP_PORT"
           sleep 1
           docker logs trapd 2>&1 | tee /tmp/trapd-v3.log
-          grep -q 'TRAP, SNMP v3' /tmp/trapd-v3.log
-          grep -q 'e2e-trap' /tmp/trapd-v3.log
-          # The trap OID is ours alone, so this line cannot be the v2c
-          # suite's linkDown trap.
+          # The trap arrived and was parsed: its OID and its payload are
+          # both in the log. snmptrapd prints no version header for v3,
+          # so the proof that it authenticated as our user is the
+          # absence of an authentication failure below — an authPriv
+          # trap whose signature did not check out is dropped, not
+          # printed.
           grep -q 'enterprises.99999.3.1' /tmp/trapd-v3.log
-          # One trap, one acknowledgement; a duplicate would show here.
-          test "$(grep -c 'TRAP, SNMP v3' /tmp/trapd-v3.log)" -eq 1
+          grep -q 'IF-MIB::ifDescr = STRING: eth0' /tmp/trapd-v3.log
+          ! grep -qi 'authentication failure' /tmp/trapd-v3.log
+          # Exactly once: a duplicated send would show here.
+          test "$(grep -c 'enterprises.99999.3.1' /tmp/trapd-v3.log)" -eq 1
           docker rm -f trapd
 
       - name: Receive notifications from a real sender
