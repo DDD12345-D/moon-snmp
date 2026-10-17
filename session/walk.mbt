@@ -14,6 +14,21 @@ pub extend WalkEntry with Eq::{not_equal, equal}
 pub extend WalkEntry with @debug.Debug::{to_repr}
 
 ///|
+/// The three requests a walk is built from, as functions.
+///
+/// A community session and a v3 client put different things on the wire
+/// — a community in one case, a security model and an engine in the
+/// other — but the walk above them is the same protocol logic: where a
+/// subtree ends, when an agent has stopped advancing, when the step
+/// ceiling is reached. Taking the three primitives as arguments keeps
+/// that logic in one place instead of two copies that can drift apart.
+priv struct WalkAccess {
+  get : (@oid.Oid) -> @pdu.VarBind raise SnmpError
+  get_next : (@oid.Oid) -> @pdu.VarBind raise SnmpError
+  get_bulk : (Array[@oid.Oid], Int, Int) -> Array[@pdu.VarBind] raise SnmpError
+}
+
+///|
 /// Build a walk entry from a var-bind.
 fn walk_entry_of(vb : @pdu.VarBind) -> WalkEntry {
   { name: vb.name, value: vb.value, }
@@ -56,8 +71,8 @@ fn is_end_marker(value : @ber.BerValue) -> Bool {
 /// lossy link can take a long time, and a caller that wants to bound
 /// the work should be able to. Pass `0` for no explicit limit beyond
 /// the "not advancing" check.
-pub fn[T : Transport] Session::walk(
-  self : Session[T],
+fn walk_with(
+  access : WalkAccess,
   root : @oid.Oid,
   max_steps : Int,
 ) -> Array[WalkEntry] raise SnmpError {
@@ -68,7 +83,7 @@ pub fn[T : Transport] Session::walk(
   // one arc *below* the root is not possible in general, so the first
   // step is special: we GET the root itself and only keep it if the
   // agent treats it as an instance.
-  let head = self.get(root)
+  let head = (access.get)(root)
   if !is_end_marker(head.value) && root.is_prefix_of(head.name) {
     out.push(walk_entry_of(head))
     cursor = head.name
@@ -82,7 +97,7 @@ pub fn[T : Transport] Session::walk(
   // accepted there is no "first" to exempt, which is what keeps a
   // stuck agent from being recorded twice.
   while max_steps == 0 || out.length() < max_steps {
-    let vb = self.get_next(cursor)
+    let vb = (access.get_next)(cursor)
     if is_end_marker(vb.value) || !root.is_prefix_of(vb.name) {
       break
     }
@@ -99,22 +114,22 @@ pub fn[T : Transport] Session::walk(
 /// Walk a subtree with GETBULK instead of GETNEXT (RFC 3416 §4.2.3).
 ///
 /// GETBULK returns up to `max_repetitions` successors per request, so a
-/// large table needs far fewer round trips. v2c only: a v1 agent does
-/// not know the request and will answer with an error, which surfaces
-/// as `AgentError`.
+/// large table needs far fewer round trips. v2c and v3 only: a v1 agent
+/// does not know the request and will answer with an error, which
+/// surfaces as `AgentError`.
 ///
 /// The start and the boundaries match `walk`, but a single reply can
 /// straddle the end of the subtree: the entries inside `root` are kept
 /// and the rest of that reply is discarded.
-pub fn[T : Transport] Session::walk_bulk(
-  self : Session[T],
+fn walk_bulk_with(
+  access : WalkAccess,
   root : @oid.Oid,
   max_repetitions : Int,
   max_steps : Int,
 ) -> Array[WalkEntry] raise SnmpError {
   let out : Array[WalkEntry] = []
   let mut cursor = root
-  let head = self.get(root)
+  let head = (access.get)(root)
   if !is_end_marker(head.value) && root.is_prefix_of(head.name) {
     out.push(walk_entry_of(head))
     cursor = head.name
@@ -124,7 +139,7 @@ pub fn[T : Transport] Session::walk_bulk(
   }
   let mut done = false
   while !done && (max_steps == 0 || out.length() < max_steps) {
-    let varbinds = self.get_bulk([cursor], 0, max_repetitions)
+    let varbinds = (access.get_bulk)([cursor], 0, max_repetitions)
     if varbinds.length() == 0 {
       break
     }
@@ -146,4 +161,39 @@ pub fn[T : Transport] Session::walk_bulk(
     }
   }
   out
+}
+
+///|
+/// The walk primitives of a community session.
+fn[T : Transport] walk_access_of(session : Session[T]) -> WalkAccess {
+  {
+    get: fn(oid) raise SnmpError { session.get(oid) },
+    get_next: fn(oid) raise SnmpError { session.get_next(oid) },
+    get_bulk: fn(oids, non_repeaters, max_repetitions) raise SnmpError {
+      session.get_bulk(oids, non_repeaters, max_repetitions)
+    },
+  }
+}
+
+///|
+/// Walk the subtree rooted at `root` with GETNEXT, in agent order. See
+/// `walk_with` for the boundaries and the stopping rules.
+pub fn[T : Transport] Session::walk(
+  self : Session[T],
+  root : @oid.Oid,
+  max_steps : Int,
+) -> Array[WalkEntry] raise SnmpError {
+  walk_with(walk_access_of(self), root, max_steps)
+}
+
+///|
+/// Walk the subtree rooted at `root` with GETBULK, which needs fewer
+/// round trips than `walk` on a large table. v2c only.
+pub fn[T : Transport] Session::walk_bulk(
+  self : Session[T],
+  root : @oid.Oid,
+  max_repetitions : Int,
+  max_steps : Int,
+) -> Array[WalkEntry] raise SnmpError {
+  walk_bulk_with(walk_access_of(self), root, max_repetitions, max_steps)
 }
