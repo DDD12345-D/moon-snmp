@@ -347,7 +347,17 @@ fn run_suite(checks : @support.Checks, host : String, port : Int) -> Unit raise 
   }
   checks.that("a wrong community times out instead of answering", timed_out)
 
-  // 16. A v1 session still reads a v2c agent: version 1 requests are
+  // 16. Liveness, as one call: the device's own clock says it is there,
+  //     and the wrong community above is reported as absent rather than
+  //     as an error — v1/v2c cannot tell those apart, so the API must
+  //     not pretend to.
+  let alive = session.probe()
+  checks.that("probe finds the running agent", alive.reachable)
+  checks.that("probe reports the agent's uptime", alive.uptime > 0)
+  let gone = bad.probe()
+  checks.that("probe reports a wrong community as unreachable", !gone.reachable)
+
+  // 17. A v1 session still reads a v2c agent: version 1 requests are
   //     what an old device needs, and the agent here answers both.
   let v1_read = session.request_versioned(
     @pdu.V1,

@@ -90,6 +90,30 @@ listening on udp/162 for community "public"
     reply     acknowledged
 ```
 
+## Liveness
+
+"Is the device there?" is one call, and it answers with the device's own
+clock rather than a bare boolean:
+
+```mbt nocheck
+let alive = session.probe()
+if alive.reachable {
+  println("up for \{alive.uptime} hundredths of a second")
+} else {
+  println("no answer")
+}
+```
+
+`probe` reads `sysUpTime.0` — one round trip, and a scalar every agent has
+to implement — and reports silence as `reachable: false` instead of
+raising, because a device that is down and a v1/v2c community that is
+wrong look exactly the same on the wire (RFC 1157 §4.1). Everything else,
+a malformed reply or an agent error, is still raised.
+
+`V3Client::probe` is the same call with the user's keys, with one useful
+difference: a wrong password is a `Security` error rather than silence,
+because the device did answer.
+
 ## SNMPv3
 
 v3 replaces the community with a user, and adds authentication and

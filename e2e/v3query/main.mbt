@@ -392,7 +392,29 @@ fn run(
   // script can compare either count with net-snmp's.
   println("v3 walk system: \{walked.length()} entries")
 
-  // 12. GETBULK over the same subtree has to agree with the GETNEXT
+  // 12. Liveness over v3: the same one call, with the user's keys. A
+  //     wrong password is a security error rather than silence — the
+  //     device is there, and saying so is more useful than calling it
+  //     down.
+  let alive = encrypted.probe()
+  checks.that("authPriv probe finds the engine", alive.reachable)
+  checks.that("authPriv probe reports the agent's uptime", alive.uptime > 0)
+  let wrong_alive = try {
+    let l = bad.probe()
+    if l.reachable {
+      "reachable"
+    } else {
+      "unreachable"
+    }
+  } catch {
+    @session.SnmpError::Security(_) => "security error"
+    _ => "other"
+  }
+  checks.text(
+    "a wrong password is a security error, not a silent device", wrong_alive, "security error",
+  )
+
+  // 13. GETBULK over the same subtree has to agree with the GETNEXT
   //     walk entry for entry: two traversals, one reply format apart.
   let bulked = encrypted.walk_bulk(@mib.system(), 10, 0)
   checks.num(
