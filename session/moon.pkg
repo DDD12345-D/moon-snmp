@@ -12,3 +12,7 @@ import {
 import {
   "moonbitlang/core/encoding/utf8",
 } for "test"
+
+options(
+  targets: { "clock_js.mbt": [ "js" ], "clock_nonjs.mbt": [ "not", "js" ] },
+)

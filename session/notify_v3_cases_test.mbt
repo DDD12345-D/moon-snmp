@@ -84,9 +84,14 @@ test "a v3 inform is addressed to the receiver's engine and waits for the ack" {
 ///|
 test "a v3 trap from another engine is accepted, with who sent it" {
   let security = v3_test_security(b"monitor", b"authpass", b"privpass")
-  let wire = v3_trap_wire(sender_engine(), security, 4242, @mib.link_down(), [
-    if_index_varbind(2),
-  ])
+  let wire = v3_trap_wire(
+    sender_engine(),
+    security,
+    1,
+    4242,
+    @mib.link_down(),
+    [if_index_varbind(2)],
+  )
   let box = Outbox::new([v3_datagram(wire)])
   let receiver = @session.Receiver::v3(box, receiver_engine(), security)
   let n = receiver.recv(10)
@@ -116,7 +121,7 @@ test "a v3 trap from another engine is accepted, with who sent it" {
 test "a v3 trap signed with the wrong password is rejected" {
   let sender = v3_test_security(b"monitor", b"authpass", b"privpass")
   let receiver_security = v3_test_security(b"monitor", b"typo", b"privpass")
-  let wire = v3_trap_wire(sender_engine(), sender, 1, @mib.link_down(), [])
+  let wire = v3_trap_wire(sender_engine(), sender, 2, 1, @mib.link_down(), [])
   let box = Outbox::new([v3_datagram(wire)])
   let receiver = @session.Receiver::v3(
     box,
@@ -188,6 +193,7 @@ test "an inform addressed to us is acknowledged with a signed Response" {
   let wire = v3_inform_wire(
     receiver_engine(),
     security,
+    3,
     4242,
     900,
     @mib.cold_start(),
@@ -210,7 +216,7 @@ test "an inform addressed to us is acknowledged with a signed Response" {
   // A Response echoes the msgID of the message it answers. net-snmp
   // matches on it: a fresh id gets the acknowledgement discarded and
   // the sender retransmits until it gives up.
-  inspect(message.msg_id, content="22")
+  inspect(message.msg_id, content="23")
   let keys = security.localize(receiver_engine().id) catch {
     _ => fail("the acknowledgement key did not localize")
   }
@@ -241,6 +247,7 @@ test "an inform addressed to another engine is accepted but not acknowledged" {
   let wire = v3_inform_wire(
     sender_engine(),
     security,
+    4,
     4242,
     900,
     @mib.cold_start(),

@@ -102,6 +102,7 @@ fn v3_notification_varbinds(
 fn v3_trap_wire(
   engine : @snmpv3.Engine,
   security : @snmpv3.Security,
+  seq : Int,
   uptime : UInt,
   trap_oid : @oid.Oid,
   extra : Array[@pdu.VarBind],
@@ -110,7 +111,7 @@ fn v3_trap_wire(
     _ => abort("the test key did not localize")
   }
   let message : @snmpv3.V3Message = {
-    msg_id: 21,
+    msg_id: 20 + seq,
     msg_max_size: @snmpv3.DEFAULT_MAX_SIZE,
     flags: { reportable: false, authenticated: true, encrypted: true, },
     security_model: @snmpv3.USM_SECURITY_MODEL,
@@ -128,7 +129,7 @@ fn v3_trap_wire(
       ),
     }),
   }
-  @snmpv3.seal(message, security, keys, b"\x00\x00\x00\x00\x00\x00\x00\x01") catch {
+  @snmpv3.seal(message, security, keys, v3_test_salt(seq)) catch {
     _ => abort("the test message did not seal")
   }
 }
@@ -139,6 +140,7 @@ fn v3_trap_wire(
 fn v3_inform_wire(
   engine : @snmpv3.Engine,
   security : @snmpv3.Security,
+  seq : Int,
   request_id : Int,
   uptime : UInt,
   trap_oid : @oid.Oid,
@@ -148,7 +150,7 @@ fn v3_inform_wire(
     _ => abort("the test key did not localize")
   }
   let message : @snmpv3.V3Message = {
-    msg_id: 22,
+    msg_id: 20 + seq,
     msg_max_size: @snmpv3.DEFAULT_MAX_SIZE,
     flags: { reportable: true, authenticated: true, encrypted: true, },
     security_model: @snmpv3.USM_SECURITY_MODEL,
@@ -166,9 +168,19 @@ fn v3_inform_wire(
       ),
     }),
   }
-  @snmpv3.seal(message, security, keys, b"\x00\x00\x00\x00\x00\x00\x00\x02") catch {
+  @snmpv3.seal(message, security, keys, v3_test_salt(seq)) catch {
     _ => abort("the test message did not seal")
   }
+}
+
+///|
+/// A salt that differs per test message. Two messages under one key with
+/// the same salt would repeat the keystream, which is the one thing AES
+/// privacy must never do.
+fn v3_test_salt(seq : Int) -> Bytes {
+  let out : Array[Byte] = [0, 0, 0, 0, 0, 0, 0]
+  out.push(seq.to_byte())
+  Bytes::from_array(out)
 }
 
 ///|

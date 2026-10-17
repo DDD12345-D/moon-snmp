@@ -15,6 +15,13 @@ struct FakeV3Agent {
   rows : Array[@session.WalkEntry]
   mut writable : Bool
   mut wrong_id : Bool
+  /// Answer the next request with a notInTimeWindow Report, as an agent
+  /// does when the client's clock is stale.
+  mut stale_once : Bool
+  /// When set, replies are signed at its level — the client then has to
+  /// verify them, which is what makes a clock check meaningful.
+  mut security : @snmpv3.Security?
+  mut salt : Int
   mut pending : Bytes?
   mut sets : Int
   mut informs : Int
@@ -29,6 +36,9 @@ fn FakeV3Agent::new(rows : Array[@session.WalkEntry]) -> FakeV3Agent {
     rows,
     writable: false,
     wrong_id: false,
+    stale_once: false,
+    security: None,
+    salt: 1,
     pending: None,
     sets: 0,
     informs: 0,
@@ -174,6 +184,15 @@ fn FakeV3Agent::answer(self : FakeV3Agent, pdu : @pdu.Pdu) -> @pdu.Pdu {
 /// The answer, renumbered to another request id when a test asks for a
 /// reply that belongs to a different request.
 fn FakeV3Agent::pdu_of(self : FakeV3Agent, request : @pdu.Pdu) -> @pdu.Pdu {
+  if self.stale_once {
+    self.stale_once = false
+    return @pdu.Pdu::request(@pdu.Report, request.request_id(), [
+      @pdu.VarBind::new(
+        @snmpv3.usm_stats_not_in_time_windows(),
+        @ber.BerValue::Counter32(1),
+      ),
+    ])
+  }
   let answer = self.answer(request)
   if !self.wrong_id {
     return answer
@@ -228,13 +247,36 @@ impl @session.Transport for FakeV3Agent with fn recv(
           pdu: self.pdu_of(scoped.pdu),
         }),
       }
+      let wire = match self.security {
+        None => reply.encode()
+        Some(s) => {
+          let keys = s.localize(self.engine_id) catch {
+            _ => raise @transport.TransportError::Timeout
+          }
+          let salt = @snmpv3.big_endian(self.salt, 8)
+          self.salt = self.salt + 1
+          @snmpv3.seal(reply, s, keys, Bytes::from_array(salt)) catch {
+            _ => raise @transport.TransportError::Timeout
+          }
+        }
+      }
       @transport.Datagram::{
         from_addr: "127.0.0.1",
         from_port: 161,
-        data: reply.encode(),
+        data: wire,
       }
     }
   }
+}
+
+///|
+/// A client that authenticates, for the cases where the fake has to sign
+/// its replies.
+fn v3_auth_client_of(
+  agent : FakeV3Agent,
+  security : @snmpv3.Security,
+) -> @session.V3Client[FakeV3Agent] {
+  @session.V3Client::new(agent, "127.0.0.1", 16161, security, 50, 0)
 }
 
 ///|

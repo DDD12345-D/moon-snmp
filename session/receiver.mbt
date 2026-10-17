@@ -14,7 +14,23 @@
 /// that sees traps from a handful of devices must not redo that work
 /// per message; the cap keeps a spoofed-engine flood from growing the
 /// cache without bound.
-const KEY_CACHE_SIZE : Int = 8
+const PEER_CACHE_SIZE : Int = 8
+
+///|
+/// What a receiver remembers about one engine: its keys, and its clock.
+///
+/// The clock is what makes a replay visible. Authentication alone is not
+/// enough: a recorded message verifies perfectly, and only the engine
+/// time says it is not from now (RFC 3414 §3.2). `boots` of -1 means
+/// "never seen" — the first message from a sender is taken at its word,
+/// which is how USM bootstraps a peer.
+struct Peer {
+  engine_id : Bytes
+  keys : @snmpv3.Keys
+  mut boots : Int
+  mut time : Int
+  mut seen_ms : Int64
+}
 
 ///|
 /// A manager listening for notifications on one UDP socket.
@@ -31,9 +47,15 @@ pub struct Receiver[T] {
   /// engine — the sender discovers it before it can send anything — so
   /// it is also the identity reports and acknowledgements come from.
   v3_engine : @snmpv3.Engine
-  /// Localized keys, by engine id. A trap is authenticated against the
-  /// *sender's* engine, so the key depends on who is talking.
-  mut key_cache : Array[(Bytes, @snmpv3.Keys)]
+  /// Localized keys and the last-seen clock, by engine id. A trap is
+  /// authenticated against the *sender's* engine, so both depend on who
+  /// is talking.
+  mut peers : Array[Peer]
+  /// Milliseconds, so the engine clocks can advance. Replaceable, so a
+  /// test can move time instead of waiting for it.
+  mut clock : () -> Int64
+  /// When `v3_engine` was recorded.
+  mut engine_seen_ms : Int64
   /// The privacy salt for acknowledgements, never repeated under one key.
   mut next_salt : Int
   /// Counters, so a caller can tell "nothing arrived" from "traffic
@@ -59,7 +81,9 @@ pub fn[T] Receiver::new(transport : T, community : Bytes?) -> Receiver[T] {
     community,
     v3_security: None,
     v3_engine: @snmpv3.Engine::unknown(),
-    key_cache: [],
+    peers: [],
+    clock: system_now_ms,
+    engine_seen_ms: 0L,
     next_salt: 1,
     accepted: 0,
     rejected: 0,
@@ -91,7 +115,9 @@ pub fn[T] Receiver::v3(
     community: None,
     v3_security: Some(security),
     v3_engine: engine,
-    key_cache: [],
+    peers: [],
+    clock: system_now_ms,
+    engine_seen_ms: system_now_ms(),
     next_salt: 1,
     accepted: 0,
     rejected: 0,
@@ -149,26 +175,86 @@ fn[T] Receiver::take_salt(self : Receiver[T]) -> Bytes {
 
 ///|
 /// The keys for one engine id, localized at most once per engine.
-fn[T] Receiver::keys_for(
+fn[T] Receiver::peer_index(
   self : Receiver[T],
   security : @snmpv3.Security,
   engine_id : Bytes,
-) -> @snmpv3.Keys raise SnmpError {
-  for entry in self.key_cache {
-    if entry.0 == engine_id {
-      return entry.1
+) -> Int raise SnmpError {
+  let mut i = 0
+  while i < self.peers.length() {
+    if self.peers[i].engine_id == engine_id {
+      return i
     }
+    i = i + 1
   }
   let keys = security.localize(engine_id) catch {
     e => raise SnmpError::Security(e)
   }
-  if self.key_cache.length() >= KEY_CACHE_SIZE {
+  if self.peers.length() >= PEER_CACHE_SIZE {
     // Simplest bound: start over rather than track ages. A receiver
     // talking to more than a handful of engines pays for it again.
-    self.key_cache = []
+    self.peers = []
   }
-  self.key_cache.push((engine_id, keys))
-  keys
+  self.peers.push({ engine_id, keys, boots: -1, time: 0, seen_ms: 0L, })
+  self.peers.length() - 1
+}
+
+///|
+/// One peer's clock as it stands now: what was last seen, advanced by the
+/// time that has passed since.
+fn[T] Receiver::peer_clock(
+  self : Receiver[T],
+  index : Int,
+  now_ms : Int64,
+) -> @snmpv3.Engine {
+  let peer = self.peers[index]
+  let reference : @snmpv3.Engine = {
+    id: peer.engine_id,
+    boots: peer.boots,
+    time: peer.time,
+  }
+  reference.advanced(now_ms - peer.seen_ms)
+}
+
+///|
+/// Take a message's clock as the peer's new reference.
+///
+/// A higher boots means the peer restarted, so the clock resets to what
+/// it says; otherwise the reference moves forward and never back.
+fn[T] Receiver::record(
+  self : Receiver[T],
+  index : Int,
+  engine : @snmpv3.Engine,
+  now_ms : Int64,
+) -> Unit {
+  let reference = self.peer_clock(index, now_ms)
+  if self.peers[index].boots < 0 || engine.boots > reference.boots {
+    self.peers[index].boots = engine.boots
+    self.peers[index].time = engine.time
+  } else if engine.time > reference.time {
+    self.peers[index].time = engine.time
+  } else {
+    self.peers[index].time = reference.time
+  }
+  self.peers[index].seen_ms = now_ms
+}
+
+///|
+/// Use another clock. Call it before the first message; a receiver cannot
+/// re-date clocks it has already recorded.
+pub fn[T] Receiver::set_clock(self : Receiver[T], clock : () -> Int64) -> Unit {
+  self.clock = clock
+  self.engine_seen_ms = clock()
+}
+
+///|
+/// This receiver's own clock as it stands now: what `v3_engine` says,
+/// advanced by the time that has passed since construction.
+fn[T] Receiver::v3_engine_now(
+  self : Receiver[T],
+  now_ms : Int64,
+) -> @snmpv3.Engine {
+  self.v3_engine.advanced(now_ms - self.engine_seen_ms)
 }
 
 ///|
@@ -218,6 +304,9 @@ fn[T : Transport] Receiver::answer_discovery(
     return
   }
   self.discoveries = self.discoveries + 1
+  // The clock in a Report is what a sender records and compares later,
+  // so it has to be the clock now, not the one from construction.
+  let ours = self.v3_engine_now((self.clock)())
   let request_id = match probe.scoped() {
     Some(scoped) => scoped.pdu.request_id()
     None => 0
@@ -233,12 +322,12 @@ fn[T : Transport] Receiver::answer_discovery(
     msg_max_size: @snmpv3.DEFAULT_MAX_SIZE,
     flags: { reportable: false, authenticated: false, encrypted: false, },
     security_model: @snmpv3.USM_SECURITY_MODEL,
-    engine: self.v3_engine,
+    engine: ours,
     user: b"",
     auth_params: b"",
     priv_params: b"",
     data: @snmpv3.Plain({
-      context_engine_id: self.v3_engine.id,
+      context_engine_id: ours.id,
       context_name: b"",
       pdu: report,
     }),
@@ -266,12 +355,18 @@ fn[T : Transport] Receiver::acknowledge_v3(
     self.unacknowledged = self.unacknowledged + 1
     return
   }
-  let keys = self.keys_for(security, self.v3_engine.id) catch {
+  let now_ms = (self.clock)()
+  let index = self.peer_index(security, self.v3_engine.id) catch {
     _ => {
       self.unacknowledged = self.unacknowledged + 1
       return
     }
   }
+  let keys = self.peers[index].keys
+  // The sender compares this clock against the one it discovered, and
+  // will refuse an acknowledgement that is more than 150 seconds old —
+  // which is what a fixed value becomes after two and a half minutes.
+  let ours = self.v3_engine_now(now_ms)
   let response : @snmpv3.V3Message = {
     // A Response echoes the msgID of the message it answers (RFC 3412
     // §7.1.2). A sender may use it to match the reply to its request,
@@ -281,7 +376,7 @@ fn[T : Transport] Receiver::acknowledge_v3(
     msg_max_size: @snmpv3.DEFAULT_MAX_SIZE,
     flags: notification_flags(message.flags.level()),
     security_model: @snmpv3.USM_SECURITY_MODEL,
-    engine: self.v3_engine,
+    engine: ours,
     user: message.user,
     auth_params: b"",
     priv_params: b"",
@@ -400,12 +495,14 @@ fn[T : Transport] Receiver::accept_v3_with(
     self.answer_discovery(dg, message)
     return None
   }
-  let keys = self.keys_for(security, message.engine.id) catch {
+  let now_ms = (self.clock)()
+  let index = self.peer_index(security, message.engine.id) catch {
     _ => {
       self.rejected = self.rejected + 1
       return None
     }
   }
+  let keys = self.peers[index].keys
   let opened = @snmpv3.open(dg.data, security, keys) catch {
     // A wrong password, an unknown user, or a message that was tampered
     // with. All three are "not for us" and must not stop the receiver.
@@ -414,6 +511,29 @@ fn[T : Transport] Receiver::accept_v3_with(
       return None
     }
   }
+  // Authentication says who sent it; the clock says when. A message that
+  // replayed an old recording would verify perfectly, so the window is
+  // the only thing that refuses it. The first message from an engine is
+  // taken at its word, which is how USM bootstraps a sender.
+  let verdict = if security.auth_protocol == @snmpv3.None {
+    // Nothing was authenticated, so there is no clock to defend: USM's
+    // window exists to keep an authenticator from being replayed.
+    @snmpv3.Fresh
+  } else if message.engine.id == self.v3_engine.id {
+    @snmpv3.local_timeliness(message.engine, self.v3_engine_now(now_ms))
+  } else if self.peers[index].boots < 0 {
+    @snmpv3.Fresh
+  } else {
+    @snmpv3.peer_timeliness(message.engine, self.peer_clock(index, now_ms))
+  }
+  match verdict {
+    @snmpv3.Stale => {
+      self.rejected = self.rejected + 1
+      return None
+    }
+    _ => ()
+  }
+  self.record(index, message.engine, now_ms)
   match opened.data {
     @snmpv3.Encrypted(_) => {
       self.rejected = self.rejected + 1

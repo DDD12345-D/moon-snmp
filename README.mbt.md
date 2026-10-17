@@ -98,6 +98,16 @@ it can authenticate anything — the keys are derived from the engine id,
 and an authenticator is only accepted if the clock is close to the
 agent's.
 
+That clock is not a one-off handshake value. Every authenticated message
+carries the sender's engine time, and both ends refuse a message more
+than 150 seconds away from the clock they hold (RFC 3414 §3.2) — which is
+what stops a recorded message from being replayed. The clocks here
+advance with the wall clock on both sides: a client keeps the agent's
+clock moving from the replies it receives and its own from the moment
+`set_local_engine` is called, and a receiver keeps both. `set_clock` on
+either side replaces the source, which is how the tests exercise the
+window without waiting two and a half minutes.
+
 ```mbt nocheck
 ///|
 fn read_over_v3() -> Unit raise {
@@ -201,8 +211,8 @@ fn report_over_v3() -> Unit raise {
     3000,
     2,
   )
-  // The clock must only move forward: a receiver records it and
-  // refuses a message that goes backwards.
+  // The clock starts here and then advances with the machine: a
+  // receiver records it and refuses anything more than 150 seconds off.
   let engine : @snmpv3.Engine = {
     id: b"\x80\x00\x1f\x88\x04collector",
     boots: 1,

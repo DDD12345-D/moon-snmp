@@ -43,6 +43,13 @@ pub struct V3Client[T] {
   mut next_request_id : Int
   /// The counter AES privacy needs a fresh value from for every message.
   mut next_salt : Int
+  /// Milliseconds, so both engine clocks can advance while the client is
+  /// alive. Replaceable: a test moves time instead of waiting for it.
+  mut clock : () -> Int64
+  /// When `engine` and `local_engine` were recorded, so the elapsed time
+  /// can be added back to their clocks.
+  mut engine_seen_ms : Int64
+  mut local_engine_seen_ms : Int64
 }
 
 ///|
@@ -71,7 +78,39 @@ pub fn[T] V3Client::new(
     next_msg_id: 1,
     next_request_id: 1,
     next_salt: 1,
+    clock: system_now_ms,
+    engine_seen_ms: 0L,
+    local_engine_seen_ms: 0L,
   }
+}
+
+///|
+/// Use another clock.
+///
+/// The default reads the system clock. A test passes a counter, because
+/// the interesting behaviour — a message older than the 150-second
+/// window being refused — is not something to wait two and a half
+/// minutes for.
+pub fn[T] V3Client::set_clock(self : V3Client[T], clock : () -> Int64) -> Unit {
+  self.clock = clock
+}
+
+///|
+/// The agent's clock as it stands now: what was learned at discovery
+/// plus the time that has passed since.
+///
+/// Sending the clock from discovery unchanged is what makes a v3 sender
+/// stop working after two and a half minutes — the agent compares the
+/// value against its own engine time and refuses anything outside the
+/// window.
+fn[T] V3Client::engine_now(self : V3Client[T]) -> @snmpv3.Engine {
+  self.engine.advanced((self.clock)() - self.engine_seen_ms)
+}
+
+///|
+/// Our own clock as it stands now, for the traps we originate.
+fn[T] V3Client::local_engine_now(self : V3Client[T]) -> @snmpv3.Engine {
+  self.local_engine.advanced((self.clock)() - self.local_engine_seen_ms)
 }
 
 ///|
@@ -172,6 +211,7 @@ pub fn[T : Transport] V3Client::discover(
     )
   }
   self.engine = message.engine
+  self.engine_seen_ms = (self.clock)()
   let keys = self.security.localize(message.engine.id) catch {
     e => raise SnmpError::Security(e)
   }
@@ -219,23 +259,63 @@ pub fn[T : Transport] V3Client::request(
     None => self.discover()
     Some(_) => ()
   }
+  // A notInTimeWindow Report means the agent's clock moved — it
+  // restarted, most likely. That is not something a caller can fix, so
+  // learn the clock again and try once more instead of leaving the
+  // client stuck with a clock no agent will accept.
+  let first : Array[@pdu.VarBind]? = Some(self.request_once(pdu)) catch {
+    e => if not_in_time_window(e) { None } else { raise e }
+  }
+  match first {
+    Some(varbinds) => varbinds
+    None => {
+      self.discover()
+      self.request_once(pdu)
+    }
+  }
+}
+
+///|
+/// Whether an error is the agent saying our clock is out of step.
+fn not_in_time_window(error : SnmpError) -> Bool {
+  match error {
+    SnmpError::Security(@snmpv3.Report(oid, _)) =>
+      oid.compare(@snmpv3.usm_stats_not_in_time_windows()) == 0
+    _ => false
+  }
+}
+
+///|
+/// One attempt at a request: seal, send, open, check the clock, and read
+/// the answer.
+///
+/// The clock check is the half of USM that authentication alone does not
+/// give you: a recorded message verifies perfectly, and only the engine
+/// time says it is not from now.
+fn[T : Transport] V3Client::request_once(
+  self : V3Client[T],
+  pdu : @pdu.Pdu,
+) -> Array[@pdu.VarBind] raise SnmpError {
   let keys = match self.keys {
     Some(k) => k
     None => raise SnmpError::Security(@snmpv3.V3Error::NotReady("no keys"))
   }
   let request_id = self.take_request_id()
+  // The agent's clock now, not the value discovery saw: the agent
+  // compares it against its own engine time.
+  let engine = self.engine_now()
 
   let message : @snmpv3.V3Message = {
     msg_id: self.take_msg_id(),
     msg_max_size: self.msg_max_size,
     flags: @snmpv3.MsgFlags::of(self.security.level),
     security_model: @snmpv3.USM_SECURITY_MODEL,
-    engine: self.engine,
+    engine,
     user: self.security.user,
     auth_params: b"",
     priv_params: b"",
     data: @snmpv3.Plain({
-      context_engine_id: self.engine.id,
+      context_engine_id: engine.id,
       context_name: b"",
       pdu: with_request_id(pdu, request_id),
     }),
@@ -257,6 +337,20 @@ pub fn[T : Transport] V3Client::request(
     Some(e) => raise SnmpError::Security(e)
     None => ()
   }
+  // Only an authenticated message has a clock worth checking: USM's
+  // window protects the authenticator from replay, and there is no
+  // authenticator at noAuthNoPriv.
+  if self.security.auth_protocol != @snmpv3.None {
+    match @snmpv3.peer_timeliness(opened.engine, self.engine_now()) {
+      @snmpv3.Stale =>
+        raise SnmpError::Security(@snmpv3.V3Error::OutsideTimeWindow)
+      _ => ()
+    }
+  }
+  // Take the agent's clock from the reply, so the next request starts
+  // from what it says rather than from what discovery said.
+  self.engine = opened.engine
+  self.engine_seen_ms = (self.clock)()
   match opened.data {
     @snmpv3.Plain(scoped) =>
       match scoped.pdu {
@@ -427,6 +521,7 @@ pub fn[T] V3Client::set_local_engine(
   engine : @snmpv3.Engine,
 ) -> Unit {
   self.local_engine = engine
+  self.local_engine_seen_ms = (self.clock)()
   self.local_keys = None
 }
 
@@ -452,7 +547,7 @@ fn[T] V3Client::notification_keys(
       k
     }
   }
-  (self.local_engine, keys)
+  (self.local_engine_now(), keys)
 }
 
 ///|
