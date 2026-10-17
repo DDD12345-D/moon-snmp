@@ -133,6 +133,13 @@ the agent incremented — a wrong digest, an unknown user, or a clock too
 far out of step. `examples/trap_listener` stays v2c; the v3 suite in
 `e2e/v3query` is the worked example for this.
 
+The same client writes and walks as well. `set` sends a SetRequest; the
+agent's access rules for that user decide whether it lands, so a
+read-only user comes back as `AgentError` rather than a silent success.
+`walk` and `walk_bulk` traverse a subtree with exactly the boundaries
+the community session uses, including the end-of-subtree and
+not-advancing checks.
+
 ## Notifications
 
 The other direction: an agent telling a manager that something

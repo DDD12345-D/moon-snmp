@@ -298,6 +298,124 @@ fn run(
     stranger_outcome != "answered",
   )
   println("       unknown user   -> \{stranger_outcome}")
+
+  // 9. SET over v3. `e2e-priv` is provisioned read-write in
+  //    snmpd.conf, and the agent is the one that commits the write, so
+  //    reading the value back is what proves the SetRequest arrived
+  //    intact rather than merely being accepted by our own code.
+  let contact = @mib.sys_contact()
+  let original = string_of(encrypted.get(contact))
+  let written = encrypted.set(
+    contact,
+    @ber.BerValue::OctetString(b"ops@example.org"),
+  )
+  checks.num("authPriv SET returns the written varbind", written.length(), 1)
+  checks.text(
+    "the agent committed the write",
+    string_of(encrypted.get(contact)),
+    "ops@example.org",
+  )
+  let _ = encrypted.set(
+    contact,
+    @ber.BerValue::OctetString(@utf8.encode(original)),
+  )
+  checks.text(
+    "the previous value can be restored",
+    string_of(encrypted.get(contact)),
+    original,
+  )
+
+  // 10. The same write as a read-only user must be refused by the
+  //     agent. The permission lives on the agent, not in the request,
+  //     so a client that reported success here would be inventing it.
+  let mut refused = false
+  try {
+    let _ = sha.set(contact, @ber.BerValue::OctetString(b"nope"))
+  } catch {
+    @session.SnmpError::AgentError(_, _) => refused = true
+    _ => ()
+  }
+  checks.that("a read-only user cannot write", refused)
+
+  // 11. WALK the system group over v3. The community suite checks the
+  //     same subtree against net-snmp's snmpwalk in CI, so walking it
+  //     here and comparing the two says the v3 path traverses the same
+  //     tree rather than merely returning something.
+  let community = @session.Session::new(
+    socket,
+    host,
+    port,
+    @pdu.V2c,
+    b"public",
+    TIMEOUT_MS,
+    RETRIES,
+    5000,
+  )
+  let reference = community.walk(@mib.system(), 0)
+  let walked = encrypted.walk(@mib.system(), 0)
+  checks.at_least(
+    "authPriv walk of the system group finds its scalars",
+    walked.length(),
+    8,
+  )
+  checks.num(
+    "authPriv walk finds as many entries as the community walk",
+    walked.length(),
+    reference.length(),
+  )
+  checks.that(
+    "authPriv walk names the same OIDs in the same order",
+    walk_names(walked) == walk_names(reference),
+  )
+  checks.text(
+    "authPriv walk starts at the group's first scalar",
+    match walked.get(0) {
+      Some(e) => e.name.to_dotted()
+      None => ""
+    },
+    @mib.sys_descr().to_dotted(),
+  )
+  let mut all_inside = true
+  let mut ascending = true
+  let mut previous : @oid.Oid? = None
+  for entry in walked {
+    if !@mib.system().is_prefix_of(entry.name) {
+      all_inside = false
+    }
+    match previous {
+      Some(p) => if entry.name.compare(p) <= 0 { ascending = false }
+      None => ()
+    }
+    previous = Some(entry.name)
+  }
+  checks.that("every v3 walked entry is inside the subtree", all_inside)
+  checks.that("the v3 walk never repeats or goes backwards", ascending)
+  // The same machine-readable line the community suite prints, so a
+  // script can compare either count with net-snmp's.
+  println("v3 walk system: \{walked.length()} entries")
+
+  // 12. GETBULK over the same subtree has to agree with the GETNEXT
+  //     walk entry for entry: two traversals, one reply format apart.
+  let bulked = encrypted.walk_bulk(@mib.system(), 10, 0)
+  checks.num(
+    "authPriv walk_bulk finds as many entries as walk",
+    bulked.length(),
+    walked.length(),
+  )
+  checks.that(
+    "authPriv walk_bulk returns the same OIDs in the same order",
+    walk_names(bulked) == walk_names(walked),
+  )
+}
+
+///|
+/// The list of OIDs of a walk, for comparing two walks.
+fn walk_names(entries : Array[@session.WalkEntry]) -> Array[String] {
+  let out : Array[String] = []
+  for e in entries {
+    out.push(e.name.to_dotted())
+  }
+  out
 }
 
 ///|

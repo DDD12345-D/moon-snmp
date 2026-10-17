@@ -32,6 +32,7 @@ pub struct V3Client[T] {
   /// The discovered engine, or the unknown engine before that.
   mut engine : @snmpv3.Engine
   mut next_msg_id : Int
+  mut next_request_id : Int
   /// The counter AES privacy needs a fresh value from for every message.
   mut next_salt : Int
 }
@@ -58,6 +59,7 @@ pub fn[T] V3Client::new(
     keys: None,
     engine: @snmpv3.Engine::unknown(),
     next_msg_id: 1,
+    next_request_id: 1,
     next_salt: 1,
   }
 }
@@ -79,6 +81,26 @@ pub fn[T] V3Client::addr(self : V3Client[T]) -> String {
 fn[T] V3Client::take_msg_id(self : V3Client[T]) -> Int {
   let id = self.next_msg_id
   self.next_msg_id = self.next_msg_id + 1
+  id
+}
+
+///|
+/// The next request id.
+///
+/// A v3 message carries two independent ids: the message id in the
+/// header and the request id in the PDU. The request id is what says a
+/// reply belongs to a request, and a client that leaves it at zero
+/// cannot tell a late duplicate of the previous reply from the answer it
+/// is waiting for — which, in a walk, looks like an agent that stopped
+/// advancing and silently truncates the result.
+fn[T] V3Client::take_request_id(self : V3Client[T]) -> Int {
+  let id = self.next_request_id
+  // Stay inside the signed 32-bit range SNMP integers use.
+  if id >= 2147483647 {
+    self.next_request_id = 1
+  } else {
+    self.next_request_id = id + 1
+  }
   id
 }
 
@@ -121,7 +143,7 @@ pub fn[T : Transport] V3Client::discover(
     data: @snmpv3.Plain({
       context_engine_id: b"",
       context_name: b"",
-      pdu: @pdu.Pdu::request(@pdu.GetRequest, self.take_msg_id(), []),
+      pdu: @pdu.Pdu::request(@pdu.GetRequest, self.take_request_id(), []),
     }),
   }
   let reply = self.exchange(probe.encode()) catch {
@@ -191,6 +213,7 @@ pub fn[T : Transport] V3Client::request(
     Some(k) => k
     None => raise SnmpError::Security(@snmpv3.V3Error::NotReady("no keys"))
   }
+  let request_id = self.take_request_id()
 
   let message : @snmpv3.V3Message = {
     msg_id: self.take_msg_id(),
@@ -204,7 +227,7 @@ pub fn[T : Transport] V3Client::request(
     data: @snmpv3.Plain({
       context_engine_id: self.engine.id,
       context_name: b"",
-      pdu,
+      pdu: with_request_id(pdu, request_id),
     }),
   }
   let wire = @snmpv3.seal(message, self.security, keys, self.take_salt()) catch {
@@ -228,12 +251,24 @@ pub fn[T : Transport] V3Client::request(
     @snmpv3.Plain(scoped) =>
       match scoped.pdu {
         @pdu.Generic(p) => {
+          // A datagram that names another request is not an answer to
+          // this one. Failing is safer than returning it: a stale
+          // duplicate would otherwise be read as the next step of a
+          // walk.
+          if p.request_id != request_id {
+            raise SnmpError::ResponseIdMismatch
+          }
           if p.error_status != @pdu.NoError {
             raise SnmpError::AgentError(p.error_status, p.error_index)
           }
           p.varbinds
         }
-        @pdu.Bulk(p) => p.varbinds
+        @pdu.Bulk(p) => {
+          if p.request_id != request_id {
+            raise SnmpError::ResponseIdMismatch
+          }
+          p.varbinds
+        }
         @pdu.TrapV1(_) => raise SnmpError::ResponseIdMismatch
       }
     @snmpv3.Encrypted(_) =>
@@ -305,4 +340,61 @@ pub fn[T : Transport] V3Client::get_bulk(
   self.request(
     @pdu.Bulk({ request_id: 0, non_repeaters, max_repetitions, varbinds, }),
   )
+}
+
+///|
+/// SET one value (RFC 3416 §4.2.5).
+///
+/// Whether the write is allowed is decided by the agent's access rules
+/// for this user, not by a community string, so a read-only user answers
+/// with `notWritable` / `noAccess` and that surfaces as `AgentError`
+/// rather than as a silent success.
+pub fn[T : Transport] V3Client::set(
+  self : V3Client[T],
+  oid : @oid.Oid,
+  value : @ber.BerValue,
+) -> Array[@pdu.VarBind] raise SnmpError {
+  self.request(
+    @pdu.Pdu::request(@pdu.SetRequest, 0, [@pdu.VarBind::new(oid, value)]),
+  )
+}
+
+///|
+/// The walk primitives of a v3 client. The walk itself is the same
+/// protocol logic as the community session's; only the wire format
+/// differs, which is why it lives in `walk.mbt` and is given the three
+/// requests as functions.
+fn[T : Transport] v3_walk_access(client : V3Client[T]) -> WalkAccess {
+  {
+    get: fn(oid) raise SnmpError { client.get(oid) },
+    get_next: fn(oid) raise SnmpError { client.get_next(oid) },
+    get_bulk: fn(oids, non_repeaters, max_repetitions) raise SnmpError {
+      client.get_bulk(oids, non_repeaters, max_repetitions)
+    },
+  }
+}
+
+///|
+/// Walk the subtree rooted at `root` with GETNEXT, in agent order, over
+/// a v3 session. The boundaries and the stopping rules are the ones
+/// `walk_with` documents.
+pub fn[T : Transport] V3Client::walk(
+  self : V3Client[T],
+  root : @oid.Oid,
+  max_steps : Int,
+) -> Array[WalkEntry] raise SnmpError {
+  walk_with(v3_walk_access(self), root, max_steps)
+}
+
+///|
+/// Walk the subtree rooted at `root` with GETBULK, which needs fewer
+/// round trips than `walk` on a large table. Unlike the community
+/// session, v3 always has GETBULK: there is no v1 to fall back to.
+pub fn[T : Transport] V3Client::walk_bulk(
+  self : V3Client[T],
+  root : @oid.Oid,
+  max_repetitions : Int,
+  max_steps : Int,
+) -> Array[WalkEntry] raise SnmpError {
+  walk_bulk_with(v3_walk_access(self), root, max_repetitions, max_steps)
 }
