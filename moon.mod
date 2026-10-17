@@ -11,7 +11,7 @@
 
 name = "DDD12345-D/moon-snmp"
 
-version = "0.1.1"
+version = "0.2.0"
 
 readme = "README.mbt.md"
 
@@ -28,7 +28,7 @@ keywords = [ "snmp", "network-management", "protocol", "ber" ]
 
 preferred_target = "js"
 
-description = "Pure MoonBit implementation of the SNMP protocol client (v1, v2c, v3)"
+description = "Pure MoonBit SNMP protocol library: client and notification receiver (v1, v2c, v3)"
 
 import {
   "moonbitstack/mooncrypt@0.3.1",
