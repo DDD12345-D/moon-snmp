@@ -207,6 +207,10 @@ test "an inform addressed to us is acknowledged with a signed Response" {
     _ => fail("the acknowledgement did not decode")
   }
   inspect(message.engine.id == receiver_engine().id, content="true")
+  // A Response echoes the msgID of the message it answers. net-snmp
+  // matches on it: a fresh id gets the acknowledgement discarded and
+  // the sender retransmits until it gives up.
+  inspect(message.msg_id, content="22")
   let keys = security.localize(receiver_engine().id) catch {
     _ => fail("the acknowledgement key did not localize")
   }

@@ -250,18 +250,31 @@ jobs:
           host=(--add-host=host.docker.internal:host-gateway)
           v3=(-v3 -u e2e-trap -l authPriv -a SHA -A trappass -x AES -X trapprivpass)
 
+          # Both senders run without `set -e` so the receiver's log is
+          # printed even when one of them fails: a timeout here is
+          # usually about discovery or the acknowledgement, and the log
+          # says which.
+          set +e
           # A v3 trap: authoritative for the sender, so no discovery.
           docker run --rm "${host[@]}" "$E2E_IMAGE" \
             snmptrap "${v3[@]}" "$addr" '' 1.3.6.1.6.3.1.1.5.4
+          trap_rc=$?
 
           # A v3 inform: net-snmp discovers our engine, we verify with
           # the key derived from it and answer; non-zero exit means the
           # acknowledgement never came.
           docker run --rm "${host[@]}" "$E2E_IMAGE" \
             snmptrap "${v3[@]}" -Ci "$addr" '' 1.3.6.1.6.3.1.1.5.2
+          inform_rc=$?
 
           wait $recv
+          recv_rc=$?
+          set -e
           cat /tmp/recv-v3.log
+          echo "trap=$trap_rc inform=$inform_rc receiver=$recv_rc"
+          test "$trap_rc" -eq 0
+          test "$inform_rc" -eq 0
+          test "$recv_rc" -eq 0
 
       - name: Clean up
         if: always()

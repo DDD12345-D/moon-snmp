@@ -34,7 +34,6 @@ pub struct Receiver[T] {
   /// Localized keys, by engine id. A trap is authenticated against the
   /// *sender's* engine, so the key depends on who is talking.
   mut key_cache : Array[(Bytes, @snmpv3.Keys)]
-  mut next_msg_id : Int
   /// The privacy salt for acknowledgements, never repeated under one key.
   mut next_salt : Int
   /// Counters, so a caller can tell "nothing arrived" from "traffic
@@ -61,7 +60,6 @@ pub fn[T] Receiver::new(transport : T, community : Bytes?) -> Receiver[T] {
     v3_security: None,
     v3_engine: @snmpv3.Engine::unknown(),
     key_cache: [],
-    next_msg_id: 1,
     next_salt: 1,
     accepted: 0,
     rejected: 0,
@@ -94,7 +92,6 @@ pub fn[T] Receiver::v3(
     v3_security: Some(security),
     v3_engine: engine,
     key_cache: [],
-    next_msg_id: 1,
     next_salt: 1,
     accepted: 0,
     rejected: 0,
@@ -136,14 +133,6 @@ fn[T] Receiver::community_ok(self : Receiver[T], community : Bytes) -> Bool {
     None => true
     Some(expected) => expected == community
   }
-}
-
-///|
-/// The next message id for messages this receiver originates.
-fn[T] Receiver::take_msg_id(self : Receiver[T]) -> Int {
-  let id = self.next_msg_id
-  self.next_msg_id = self.next_msg_id + 1
-  id
 }
 
 ///|
@@ -283,7 +272,11 @@ fn[T : Transport] Receiver::acknowledge_v3(
     }
   }
   let response : @snmpv3.V3Message = {
-    msg_id: self.take_msg_id(),
+    // A Response echoes the msgID of the message it answers (RFC 3412
+    // §7.1.2). A sender may use it to match the reply to its request,
+    // and net-snmp does: a fresh id here makes the acknowledgement
+    // arrive and be discarded.
+    msg_id: message.msg_id,
     msg_max_size: @snmpv3.DEFAULT_MAX_SIZE,
     flags: notification_flags(message.flags.level()),
     security_model: @snmpv3.USM_SECURITY_MODEL,
