@@ -97,6 +97,19 @@ pub fn MsgFlags::of(level : SecurityLevel) -> MsgFlags {
 }
 
 ///|
+/// How much protection a level gives, so two of them can be compared.
+/// USM refuses a message whose level is below the user's minimum
+/// (RFC 3414 §3.2), which needs an ordering the enum itself does not
+/// carry.
+pub fn SecurityLevel::rank(self : SecurityLevel) -> Int {
+  match self {
+    NoAuthNoPriv => 0
+    AuthNoPriv => 1
+    AuthPriv => 2
+  }
+}
+
+///|
 /// The level the flags describe. A priv flag without auth is not a level
 /// this library will produce, but a peer could send it; it is read as
 /// AuthPriv because the message is encrypted either way.

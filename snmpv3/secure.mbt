@@ -240,6 +240,65 @@ pub fn report_meaning(oid : @oid.Oid) -> String {
 }
 
 ///|
+/// The reasons USM has for refusing a message, each with its own
+/// `usmStats` counter (RFC 3414 §5).
+///
+/// An authoritative engine does not drop a message silently: it answers
+/// with a Report naming the counter it incremented, so the sender learns
+/// whether its password, its clock, or its idea of the engine is wrong.
+pub(all) enum ReportKind {
+  /// The security level is below what this user is allowed to use.
+  UnsupportedSecLevels
+  /// The engine clock is outside the 150-second window.
+  NotInTimeWindows
+  /// No such user on this engine.
+  UnknownUserNames
+  /// The sender does not know this engine yet — the discovery answer.
+  UnknownEngineIds
+  /// The authenticator did not match.
+  WrongDigests
+  /// The ciphertext did not open.
+  DecryptionErrors
+} derive(Eq, @debug.Debug)
+
+///|
+pub extend ReportKind with Eq::{not_equal, equal}
+
+///|
+pub extend ReportKind with @debug.Debug::{to_repr}
+
+///|
+/// The counter OID a Report of this kind carries.
+pub fn ReportKind::oid(self : ReportKind) -> @oid.Oid {
+  match self {
+    UnsupportedSecLevels => usm_stats_unsupported_sec_levels()
+    NotInTimeWindows => usm_stats_not_in_time_windows()
+    UnknownUserNames => usm_stats_unknown_user_names()
+    UnknownEngineIds => usm_stats_unknown_engine_ids()
+    WrongDigests => usm_stats_wrong_digests()
+    DecryptionErrors => usm_stats_decryption_errors()
+  }
+}
+
+///|
+/// The number of kinds, for a counter table.
+pub const REPORT_KINDS : Int = 6
+
+///|
+/// A stable slot per kind, so a receiver can keep one counter for each
+/// without a map.
+pub fn ReportKind::slot(self : ReportKind) -> Int {
+  match self {
+    UnsupportedSecLevels => 0
+    NotInTimeWindows => 1
+    UnknownUserNames => 2
+    UnknownEngineIds => 3
+    WrongDigests => 4
+    DecryptionErrors => 5
+  }
+}
+
+///|
 /// One of the `usmStats` counters, 1.3.6.1.6.3.15.1.1.<n>.0.
 fn usm_stat(n : UInt) -> @oid.Oid {
   let parts : Array[UInt] = [1U, 3U, 6U, 1U, 6U, 3U, 15U, 1U, 1U, n, 0U]

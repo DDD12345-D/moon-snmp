@@ -68,9 +68,9 @@ pub struct Receiver[T] {
   /// sender's address was not reported by the transport, or because
   /// this receiver is not the engine the message is addressed to.
   mut unacknowledged : Int
-  /// Discovery probes answered: senders that asked who we are before
-  /// sending an inform.
-  mut discoveries : Int
+  /// Reports sent, one counter per `usmStats` kind: the value a Report
+  /// carries is the number of times that reason has come up.
+  report_counts : Array[Int]
 }
 
 ///|
@@ -88,7 +88,7 @@ pub fn[T] Receiver::new(transport : T, community : Bytes?) -> Receiver[T] {
     accepted: 0,
     rejected: 0,
     unacknowledged: 0,
-    discoveries: 0,
+    report_counts: Array::make(@snmpv3.REPORT_KINDS, 0),
   }
 }
 
@@ -122,7 +122,7 @@ pub fn[T] Receiver::v3(
     accepted: 0,
     rejected: 0,
     unacknowledged: 0,
-    discoveries: 0,
+    report_counts: Array::make(@snmpv3.REPORT_KINDS, 0),
   }
 }
 
@@ -148,7 +148,7 @@ pub fn[T] Receiver::unacknowledged(self : Receiver[T]) -> Int {
 ///|
 /// How many v3 senders were told what this engine is.
 pub fn[T] Receiver::discoveries(self : Receiver[T]) -> Int {
-  self.discoveries
+  self.report_counts[@snmpv3.ReportKind::slot(@snmpv3.UnknownEngineIds)]
 }
 
 ///|
@@ -288,37 +288,64 @@ fn[T : Transport] Receiver::acknowledge(
 }
 
 ///|
-/// Tell a sender what this engine is, so it can address an inform to it.
-///
-/// Discovery is a message with an empty engine id and an empty user,
-/// and the answer is a Report counting an unknown engine id — which is
-/// the protocol working, not an error (RFC 3414 §4). The Report is
-/// unauthenticated because there is nothing yet to authenticate with.
-fn[T : Transport] Receiver::answer_discovery(
-  self : Receiver[T],
-  dg : @transport.Datagram,
-  probe : @snmpv3.V3Message,
-) -> Unit {
-  if self.v3_engine.id.length() == 0 || dg.from_addr == "" {
-    self.rejected = self.rejected + 1
-    return
-  }
-  self.discoveries = self.discoveries + 1
-  // The clock in a Report is what a sender records and compares later,
-  // so it has to be the clock now, not the one from construction.
-  let ours = self.v3_engine_now((self.clock)())
-  let request_id = match probe.scoped() {
+/// Count one reason and return its new value, which is what the Report's
+/// var-bind carries — `usmStats` counters are cumulative.
+fn[T] Receiver::bump(self : Receiver[T], kind : @snmpv3.ReportKind) -> Int {
+  let slot = @snmpv3.ReportKind::slot(kind)
+  let count = self.report_counts[slot] + 1
+  self.report_counts[slot] = count
+  count
+}
+
+///|
+/// The PDU a Report carries: one var-bind, the counter that explains the
+/// refusal (RFC 3414 §5).
+fn report_pdu(
+  kind : @snmpv3.ReportKind,
+  count : Int,
+  request_id : Int,
+) -> @pdu.Pdu {
+  @pdu.Pdu::request(@pdu.Report, request_id, [
+    @pdu.VarBind::new(
+      @snmpv3.ReportKind::oid(kind),
+      @ber.BerValue::Counter32(count.reinterpret_as_uint()),
+    ),
+  ])
+}
+
+///|
+/// The request-id a Report should echo, when it can be read. An encrypted
+/// message cannot be opened until the keys are right, and a Report about
+/// a key that is wrong is exactly when it cannot be — so 0 then.
+fn report_request_id(message : @snmpv3.V3Message) -> Int {
+  match message.scoped() {
     Some(scoped) => scoped.pdu.request_id()
     None => 0
   }
-  let report = @pdu.Pdu::request(@pdu.Report, request_id, [
-    @pdu.VarBind::new(
-      @snmpv3.usm_stats_unknown_engine_ids(),
-      @ber.BerValue::Counter32(self.discoveries.reinterpret_as_uint()),
-    ),
-  ])
+}
+
+///|
+/// Answer with an unauthenticated Report.
+///
+/// This is the only form available when nothing about the sender can be
+/// trusted yet: an unknown engine, an unknown user, a digest that did
+/// not check out. The sender reads it to learn *why* it was refused
+/// instead of waiting for a timeout.
+fn[T : Transport] Receiver::send_report(
+  self : Receiver[T],
+  dg : @transport.Datagram,
+  kind : @snmpv3.ReportKind,
+  msg_id : Int,
+  request_id : Int,
+) -> Unit {
+  if dg.from_addr == "" || self.v3_engine.id.length() == 0 {
+    self.rejected = self.rejected + 1
+    return
+  }
+  let count = self.bump(kind)
+  let ours = self.v3_engine_now((self.clock)())
   let message : @snmpv3.V3Message = {
-    msg_id: probe.msg_id,
+    msg_id,
     msg_max_size: @snmpv3.DEFAULT_MAX_SIZE,
     flags: { reportable: false, authenticated: false, encrypted: false, },
     security_model: @snmpv3.USM_SECURITY_MODEL,
@@ -329,10 +356,60 @@ fn[T : Transport] Receiver::answer_discovery(
     data: @snmpv3.Plain({
       context_engine_id: ours.id,
       context_name: b"",
-      pdu: report,
+      pdu: report_pdu(kind, count, request_id),
     }),
   }
   self.transport.send(dg.from_addr, dg.from_port, message.encode()) catch {
+    _ => self.unacknowledged = self.unacknowledged + 1
+  }
+}
+
+///|
+/// Answer with a Report the sender can verify and decrypt.
+///
+/// Used when the message itself was authentic but its clock was not —
+/// the sender proved who it is, so it gets a signed answer that says
+/// which clock to fix, in the same context and at the same level.
+fn[T : Transport] Receiver::send_signed_report(
+  self : Receiver[T],
+  dg : @transport.Datagram,
+  security : @snmpv3.Security,
+  kind : @snmpv3.ReportKind,
+  msg_id : Int,
+  request_id : Int,
+  scoped : @snmpv3.ScopedPdu,
+  user : Bytes,
+  level : @snmpv3.SecurityLevel,
+  keys : @snmpv3.Keys,
+) -> Unit {
+  if dg.from_addr == "" || self.v3_engine.id.length() == 0 {
+    self.rejected = self.rejected + 1
+    return
+  }
+  let count = self.bump(kind)
+  let ours = self.v3_engine_now((self.clock)())
+  let message : @snmpv3.V3Message = {
+    msg_id,
+    msg_max_size: @snmpv3.DEFAULT_MAX_SIZE,
+    flags: notification_flags(level),
+    security_model: @snmpv3.USM_SECURITY_MODEL,
+    engine: ours,
+    user,
+    auth_params: b"",
+    priv_params: b"",
+    data: @snmpv3.Plain({
+      context_engine_id: scoped.context_engine_id,
+      context_name: scoped.context_name,
+      pdu: report_pdu(kind, count, request_id),
+    }),
+  }
+  let wire = @snmpv3.seal(message, security, keys, self.take_salt()) catch {
+    _ => {
+      self.unacknowledged = self.unacknowledged + 1
+      return
+    }
+  }
+  self.transport.send(dg.from_addr, dg.from_port, wire) catch {
     _ => self.unacknowledged = self.unacknowledged + 1
   }
 }
@@ -492,7 +569,44 @@ fn[T : Transport] Receiver::accept_v3_with(
   // Discovery: no engine id, empty user, nothing to authenticate. It is
   // not a notification, so it is neither accepted nor rejected.
   if message.engine.id.length() == 0 {
-    self.answer_discovery(dg, message)
+    self.send_report(
+      dg,
+      @snmpv3.UnknownEngineIds,
+      message.msg_id,
+      report_request_id(message),
+    )
+    return None
+  }
+  // Only an authoritative engine reports a refusal: for a trap the
+  // sender is the authority, and it would not believe our counter.
+  let authoritative = message.engine.id == self.v3_engine.id
+  // This receiver speaks for one user. A message for another is refused
+  // before any key is derived, which is what keeps an unknown name from
+  // costing a megabyte of hashing.
+  if message.user != security.user {
+    if authoritative {
+      self.send_report(
+        dg,
+        @snmpv3.UnknownUserNames,
+        message.msg_id,
+        report_request_id(message),
+      )
+    }
+    self.rejected = self.rejected + 1
+    return None
+  }
+  // A level below the user's minimum is refused before decryption, and
+  // says so: "your password did not match" would be the wrong story.
+  if message.flags.level().rank() < security.level.rank() {
+    if authoritative {
+      self.send_report(
+        dg,
+        @snmpv3.UnsupportedSecLevels,
+        message.msg_id,
+        report_request_id(message),
+      )
+    }
+    self.rejected = self.rejected + 1
     return None
   }
   let now_ms = (self.clock)()
@@ -504,9 +618,18 @@ fn[T : Transport] Receiver::accept_v3_with(
   }
   let keys = self.peers[index].keys
   let opened = @snmpv3.open(dg.data, security, keys) catch {
-    // A wrong password, an unknown user, or a message that was tampered
-    // with. All three are "not for us" and must not stop the receiver.
-    _ => {
+    e => {
+      // A wrong password, a broken cipher, or a message that was tampered
+      // with. All three are "not for us", and all three can be told apart
+      // so the sender knows what to fix.
+      if authoritative {
+        let kind = match e {
+          @snmpv3.V3Error::AuthenticationFailed => @snmpv3.WrongDigests
+          @snmpv3.V3Error::DecryptionFailed => @snmpv3.DecryptionErrors
+          _ => @snmpv3.WrongDigests
+        }
+        self.send_report(dg, kind, message.msg_id, report_request_id(message))
+      }
       self.rejected = self.rejected + 1
       return None
     }
@@ -519,7 +642,7 @@ fn[T : Transport] Receiver::accept_v3_with(
     // Nothing was authenticated, so there is no clock to defend: USM's
     // window exists to keep an authenticator from being replayed.
     @snmpv3.Fresh
-  } else if message.engine.id == self.v3_engine.id {
+  } else if authoritative {
     @snmpv3.local_timeliness(message.engine, self.v3_engine_now(now_ms))
   } else if self.peers[index].boots < 0 {
     @snmpv3.Fresh
@@ -528,6 +651,26 @@ fn[T : Transport] Receiver::accept_v3_with(
   }
   match verdict {
     @snmpv3.Stale => {
+      // The sender proved who it is, so it can read a signed answer that
+      // says which clock to fix. A stale trap gets silence: its sender is
+      // the authority and this receiver has nothing to tell it.
+      if authoritative {
+        match opened.data {
+          @snmpv3.Plain(scoped) =>
+            self.send_signed_report(
+              dg,
+              security,
+              @snmpv3.NotInTimeWindows,
+              message.msg_id,
+              scoped.pdu.request_id(),
+              scoped,
+              message.user,
+              message.flags.level(),
+              keys,
+            )
+          @snmpv3.Encrypted(_) => ()
+        }
+      }
       self.rejected = self.rejected + 1
       return None
     }

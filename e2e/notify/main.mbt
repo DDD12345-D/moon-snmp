@@ -142,8 +142,11 @@ fn main {
     "recv-v3" => {
       let port = args.number(3, DEFAULT_RECV_PORT)
       let wanted = args.number(4, DEFAULT_WANTED)
+      // A deliberate refusal (a wrong password, say) is counted, not
+      // treated as an accident: the caller says how many to expect.
+      let refused = args.number(5, 0)
       println("notify v3 receive suite on udp/\{port}, expecting \{wanted}\n")
-      recv_v3_suite(checks, port, wanted) catch {
+      recv_v3_suite(checks, port, wanted, refused) catch {
         e => checks.bad("the suite ran to completion", Repr(e).to_string())
       }
       checks.finish("notify v3 receive suite")
@@ -445,6 +448,7 @@ fn recv_v3_suite(
   checks : @support.Checks,
   port : Int,
   wanted : Int,
+  refused : Int,
 ) -> Unit raise {
   let socket = @transport.Transport::open(port, 3000)
   println("listening on udp/\{socket.local_port()}")
@@ -541,7 +545,11 @@ fn recv_v3_suite(
     }
   }
   checks.num("all expected v3 notifications arrived", got, wanted)
-  checks.num("nothing was rejected", receiver.rejected(), 0)
+  checks.num(
+    "only the deliberate refusals were rejected",
+    receiver.rejected(),
+    refused,
+  )
   checks.num("nothing was left unacknowledged", receiver.unacknowledged(), 0)
   checks.that(
     "the inform sender discovered our engine",

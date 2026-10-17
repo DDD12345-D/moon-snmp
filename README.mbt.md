@@ -234,6 +234,14 @@ from the message, and acknowledges an inform addressed to its own. A
 receiver with an empty engine id can still take traps but cannot receive
 informs: there is nothing to tell a sender.
 
+When it refuses a message it says why, with a `usmStats` Report: a wrong
+digest, an unknown user, a security level below the user's minimum, a
+clock outside the window, a ciphertext that does not open. That Report
+is the difference between a sender that knows to fix its password and
+one that gives up on a timeout. Reports are unauthenticated where
+nothing about the sender can be trusted yet, and signed where the
+message itself was authentic.
+
 ## References
 
 The protocol is defined by these documents, and the shape of this

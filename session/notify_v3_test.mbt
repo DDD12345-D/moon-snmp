@@ -113,7 +113,7 @@ fn v3_trap_wire(
   let message : @snmpv3.V3Message = {
     msg_id: 20 + seq,
     msg_max_size: @snmpv3.DEFAULT_MAX_SIZE,
-    flags: { reportable: false, authenticated: true, encrypted: true, },
+    flags: { ..@snmpv3.MsgFlags::of(security.level), reportable: false, },
     security_model: @snmpv3.USM_SECURITY_MODEL,
     engine,
     user: security.user,
@@ -152,7 +152,7 @@ fn v3_inform_wire(
   let message : @snmpv3.V3Message = {
     msg_id: 20 + seq,
     msg_max_size: @snmpv3.DEFAULT_MAX_SIZE,
-    flags: { reportable: true, authenticated: true, encrypted: true, },
+    flags: { ..@snmpv3.MsgFlags::of(security.level), reportable: true, },
     security_model: @snmpv3.USM_SECURITY_MODEL,
     engine,
     user: security.user,
