@@ -19,8 +19,9 @@ fn js_udp_registry() -> Unit {
 }
 
 ///|
-fn js_udp_open(bind_port : Int) -> Int {
+fn js_udp_open(bind_port : Int, ipv6 : Bool) -> Int {
   let _ = bind_port
+  let _ = ipv6
   panic_unimplemented()
 }
 

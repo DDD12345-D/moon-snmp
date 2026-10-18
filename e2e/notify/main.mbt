@@ -685,6 +685,63 @@ fn loopback_suite(checks : @support.Checks) -> Unit raise {
   }
   last_socket.close()
 
+  // IPv6, the same way: two sockets and one datagram. A socket belongs to
+  // one family, so this is the only thing that proves the other family
+  // works — a v4 socket cannot reach `::1` and a v6 one cannot reach a
+  // dotted-decimal address.
+  ipv6_round_trip(checks)
+
   receiving_socket.close()
   sending_socket.close()
+}
+
+///|
+/// One datagram across an IPv6 loopback.
+///
+/// A host without IPv6 is a skip, not a failure: the point is to prove
+/// that when the platform has it, this library can use it. The reason is
+/// printed either way, so a regression here is not mistaken for a host
+/// without v6.
+fn ipv6_round_trip(checks : @support.Checks) -> Unit {
+  let receiving = @transport.Transport::open_ipv6(0, 3000) catch {
+    e => {
+      println("       (no IPv6 loopback here: \{Repr(e)} — skipped)")
+      return
+    }
+  }
+  let port = receiving.local_port()
+  let sending = @transport.Transport::open_ipv6(0, 3000) catch {
+    e => {
+      checks.bad("a second IPv6 socket opens", Repr(e).to_string())
+      receiving.close()
+      return
+    }
+  }
+  let outcome = try {
+    sending.send("::1", port, b"v6")
+    receiving.recv(2000)
+  } catch {
+    @transport.TransportError::Timeout => {
+      checks.bad("a datagram crosses the IPv6 loopback", "timeout")
+      sending.close()
+      receiving.close()
+      return
+    }
+    e => {
+      checks.bad("a datagram crosses the IPv6 loopback", Repr(e).to_string())
+      sending.close()
+      receiving.close()
+      return
+    }
+  }
+  checks.text(
+    "an IPv6 datagram carries its payload",
+    @utf8.decode_lossy(outcome.data),
+    "v6",
+  )
+  // The address is what a receiver prints as a notification's origin, so
+  // it has to be the v6 text rather than an empty string.
+  checks.text("the IPv6 sender's address is reported", outcome.from_addr, "::1")
+  sending.close()
+  receiving.close()
 }

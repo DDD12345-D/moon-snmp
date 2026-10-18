@@ -30,8 +30,37 @@ pub fn Transport::open(
   bind_port : Int,
   bind_timeout_ms : Int,
 ) -> Transport raise TransportError {
+  open_family(bind_port, bind_timeout_ms, false)
+}
+
+///|
+/// The same socket, on IPv6.
+///
+/// A socket belongs to one address family: this one talks to `::1` and
+/// to link-local or global v6 addresses, and cannot reach a dotted
+/// decimal v4 address at all (send it one and the OS refuses). Which
+/// family a client needs is the caller's knowledge — the peer's address
+/// decides it — so the two are separate calls rather than a guess.
+///
+/// Everything above this layer takes a `Transport` value, so sessions,
+/// v3 clients and receivers work over v6 without knowing about it.
+pub fn Transport::open_ipv6(
+  bind_port : Int,
+  bind_timeout_ms : Int,
+) -> Transport raise TransportError {
+  open_family(bind_port, bind_timeout_ms, true)
+}
+
+///|
+/// The one place a socket is actually opened, so the two families cannot
+/// drift apart.
+fn open_family(
+  bind_port : Int,
+  bind_timeout_ms : Int,
+  ipv6 : Bool,
+) -> Transport raise TransportError {
   js_udp_registry()
-  let handle = js_udp_open(bind_port)
+  let handle = js_udp_open(bind_port, ipv6)
   if handle < 0 {
     raise TransportError::UnsupportedPlatform
   }

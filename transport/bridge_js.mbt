@@ -67,8 +67,10 @@ extern "js" fn js_udp_registry() -> Unit =
 ///
 /// `bind_port` of 0 asks the OS for an ephemeral port, which is what a
 /// client wants; a receiver passes the port it should listen on.
-extern "js" fn js_udp_open(bind_port : Int) -> Int =
-  #| function(bind_port) {
+/// `ipv6` picks the family, and with it the address the socket binds:
+/// `::` for v6, `0.0.0.0` for v4.
+extern "js" fn js_udp_open(bind_port : Int, ipv6 : Bool) -> Int =
+  #| function(bind_port, ipv6) {
   #|  const reg = globalThis.__snmpUdp;
   #|  if (!reg) return -1;
   #|  const { Worker } = process.getBuiltinModule("node:worker_threads");
@@ -82,7 +84,7 @@ extern "js" fn js_udp_open(bind_port : Int) -> Int =
   #|    const AUX = new Int32Array(sab, 32, CAP * (STRIDE / 4));
   #|    const RAW = new Uint8Array(sab, 32, CAP * STRIDE);
   #|    const encoder = new TextEncoder();
-  #|    const sock = dgram.createSocket("udp4");
+  #|    const sock = dgram.createSocket(workerData.ipv6 ? "udp6" : "udp4");
   #|    let tail = 0;
   #|    function fail(msg) {
   #|      console.error("[snmp-udp] " + msg);
@@ -154,12 +156,12 @@ extern "js" fn js_udp_open(bind_port : Int) -> Int =
   #|    Atomics.store(ctrl, 2, 0);
   #|    Atomics.store(ctrl, 3, 0);
   #|    Atomics.store(ctrl, 5, CAP);
-  #|    sock.bind(workerData.port, "0.0.0.0");
+  #|    sock.bind(workerData.port, workerData.ipv6 ? "::" : "0.0.0.0");
   #|  `;
   #|  const sab = new SharedArrayBuffer(131072);
   #|  const worker = new Worker(workerCode, {
   #|    eval: true,
-  #|    workerData: { sab, port: bind_port },
+  #|    workerData: { sab, port: bind_port, ipv6: ipv6 },
   #|  });
   #|  const handle = reg.sockets.length;
   #|  reg.sockets.push({
