@@ -2,7 +2,7 @@
 /// Listen for traps and informs.
 ///
 ///   moon run examples/trap_listener
-///   moon run examples/trap_listener -- 162 monitoring
+///   moon run examples/trap_listener -- 1162 monitoring
 ///
 /// Binds the standard trap port and prints what arrives until it is
 /// interrupted. Everything about a notification is worth showing at least

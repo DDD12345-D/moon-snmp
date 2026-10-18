@@ -52,13 +52,17 @@ module default, so no flag is required.
 $ moon run examples/query -- 192.0.2.10 public 161
 asking 192.0.2.10:161 as "public"
 
-sysDescr     "Linux testbox 6.1.0 x86_64"
+sysDescr     "Linux snmpd 6.17.0 x86_64"
 sysObjectID  OID: 1.3.6.1.4.1.8072.3.2.10
 sysUpTime    Timeticks: (407567) 1:07:55.67
-sysName      "testbox"
+sysName      "moon-snmp-test-agent"
 sysContact   "dev@example.com"
 sysLocation  "Hackathon Lab"
 ```
+
+The fixed values are the ones the fixture in `e2e/docker/snmpd.conf` sets;
+`sysDescr` is whatever kernel string the device reports, and `sysUpTime`
+counts from when its agent started.
 
 `examples/walk_table`, which is where a table's shape on the wire
 matters: cells arrive column-major, so a row per interface means
@@ -77,8 +81,8 @@ index  name  type              mtu    speed    status  address
 goes quiet:
 
 ```console
-$ moon run examples/trap_listener -- 162
-listening on udp/162 for community "public"
+$ moon run examples/trap_listener -- 1162
+listening on udp/1162 for community "public"
 
 --- 1: trap v2c from 192.0.2.10:52427
     what      1.3.6.1.6.3.1.1.5.3
