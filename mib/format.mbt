@@ -208,6 +208,17 @@ pub fn counter_delta(earlier : UInt, later : UInt) -> UInt {
 }
 
 ///|
+/// The same difference for a Counter64.
+///
+/// No interface reaches 2^64 octets between two samples, so this wrap
+/// never happens in practice — but the arithmetic is the same, and
+/// writing it the same way means a wrap cannot be the thing that breaks
+/// a monitor years from now.
+pub fn counter64_delta(earlier : UInt64, later : UInt64) -> UInt64 {
+  later - earlier
+}
+
+///|
 /// A one-decimal number, for a rate that does not need more.
 fn one_decimal(whole : Int64, tenth : Int64) -> String {
   "\{whole}.\{tenth}"

@@ -105,6 +105,9 @@ jobs:
             127.0.0.1 public "$AGENT_PORT" 5 | tee /tmp/rates.log
           grep -q 'interface' /tmp/rates.log
           grep -Eq '^[0-9]+ +' /tmp/rates.log
+          # net-snmp has ifXTable, so the 64-bit columns are the ones a
+          # correct reader picks; the 32-bit fallback is for old devices.
+          grep -q '64-bit' /tmp/rates.log
           # The counters the rates were divided from, straight from the
           # agent: a zero rate is then readable as "the link was idle"
           # rather than as a parsing mistake on our side.

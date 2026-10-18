@@ -158,6 +158,24 @@ pub fn if_out_octets() -> @oid.Oid {
 }
 
 ///|
+/// ifHCInOctets column, 1.3.6.1.2.1.31.1.1.1.6 — the 64-bit form of
+/// ifInOctets (Counter64, RFC 2863 §2.2.6).
+///
+/// The 32-bit counter wraps in under four seconds on a 10G link, so a
+/// rate on anything but an idle interface has to come from here. The
+/// 32-bit column is the fallback for devices that predate ifXTable.
+pub fn if_hc_in_octets() -> @oid.Oid {
+  lit("1.3.6.1.2.1.31.1.1.1.6")
+}
+
+///|
+/// ifHCOutOctets column, 1.3.6.1.2.1.31.1.1.1.10 — the 64-bit form of
+/// ifOutOctets (Counter64, RFC 2863 §2.2.10).
+pub fn if_hc_out_octets() -> @oid.Oid {
+  lit("1.3.6.1.2.1.31.1.1.1.10")
+}
+
+///|
 /// `ip` group root, 1.3.6.1.2.1.4 (RFC 1213 §6.4).
 pub fn ip() -> @oid.Oid {
   lit("1.3.6.1.2.1.4")

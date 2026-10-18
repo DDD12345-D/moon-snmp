@@ -23,3 +23,13 @@ test "a bit rate lands in the unit a person would use" {
   // than print a plausible-looking negative.
   inspect(@mib.format_bit_rate(-5L), content="?")
 }
+
+///|
+test "a 64-bit counter difference has the same shape" {
+  inspect(@mib.counter64_delta(100, 200).reinterpret_as_int64(), content="100")
+  // The wrap that cannot happen in practice still has to be right.
+  inspect(
+    @mib.counter64_delta(18_446_744_073_709_551_600, 10).reinterpret_as_int64(),
+    content="26",
+  )
+}

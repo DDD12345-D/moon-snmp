@@ -4,24 +4,29 @@
 ///   moon run examples/interface_rates
 ///   moon run examples/interface_rates -- 192.0.2.10 public 161 5
 ///
-/// `ifInOctets` and `ifOutOctets` are Counter32: octets since the
-/// interface came up, not a rate. A rate is two reads and a division, and
-/// three things make it wrong if they are not handled. The counter wraps
-/// at 2^32 — a busy 10G port does that in under four seconds — which is
-/// `@mib.counter_delta`'s job. The interface list can change between the
-/// reads, so a disappearing interface is dropped rather than paired with
-/// a lookalike. And an agent caches its interface table: net-snmp serves
-/// ifTable from a cache of a few seconds, so two reads a second apart
-/// return the same counters and honestly report zero. The default
-/// interval is five seconds for that reason, not for round numbers.
+/// A rate is two reads and a division, and four things make it wrong if
+/// they are not handled:
+///
+///   * the counters wrap. `ifInOctets` is a Counter32, and on a 10G link
+///     that is four seconds of traffic — so the 64-bit `ifHCInOctets`
+///     columns are read first, and the 32-bit ones are only a fallback for
+///     devices that predate `ifXTable` (RFC 2863);
+///   * the interface list can change between the reads, so an interface
+///     that disappears is dropped rather than paired with a lookalike;
+///   * the interval has to be the time that actually passed, not the time
+///     the program asked for;
+///   * an agent caches its interface table. net-snmp serves `ifTable` from
+///     a cache of a few seconds, so two reads a second apart return the
+///     same counters and honestly report zero. The default interval is
+///     five seconds for that reason, not for round numbers.
 
 ///|
 /// One interface's counters, as one sample found them.
 struct Counters {
   index : UInt
   descr : String
-  in_octets : UInt
-  out_octets : UInt
+  in_octets : UInt64
+  out_octets : UInt64
 }
 
 ///|
@@ -38,8 +43,7 @@ fn main {
   let cli = @common.Cli::read()
   let target = cli.target()
   // Seconds, because that is what a person types; the socket counts
-  // milliseconds. Five by default: shorter than an agent's ifTable cache
-  // reads the same counters twice and reports zero.
+  // milliseconds.
   let interval = cli.number(5, 5)
   println(
     "sampling \{target.host}:\{target.port} over \{interval}s (community \"\{@utf8.decode_lossy(target.community)}\")\n",
@@ -80,7 +84,7 @@ fn main {
   }
   socket.close()
   match outcome {
-    Some(rates) => print_rates(rates)
+    Some((rates, wide)) => print_rates(rates, wide)
     None => @common.fail(1)
   }
 }
@@ -89,6 +93,10 @@ fn main {
 /// Read the counters, wait, read them again, and turn the difference into
 /// a rate.
 ///
+/// Which pair of columns to read is decided once, from the first sample:
+/// an agent that implements `ifXTable` answers the 64-bit walk, and one
+/// that does not answers it with nothing.
+///
 /// The clock is read around the wait so a slow device stretches the
 /// interval rather than being reported as faster than it is. The second
 /// walk happens after the clock is stopped, which makes the rate a little
@@ -96,34 +104,50 @@ fn main {
 fn measure(
   session : @session.Session[@transport.Transport],
   interval : Int,
-) -> Array[Rate] raise {
-  let first = sample(session)
+) -> (Array[Rate], Bool) raise {
+  let mut wide = true
+  let mut first = sample(session, wide)
+  if first.length() == 0 {
+    // No ifXTable on this device: the 32-bit columns are all there is.
+    wide = false
+    first = sample(session, wide)
+  }
   let started = @common.now_ms()
   @common.sleep_ms(interval * 1000)
-  let second = sample(session)
+  let second = sample(session, wide)
   let elapsed_ms = @common.now_ms() - started
-  rates_between(first, second, elapsed_ms)
+  (rates_between(first, second, elapsed_ms, wide), wide)
 }
 
 ///|
 /// One pass over the three columns this program needs.
 ///
-/// Three walks rather than one walk of `ifEntry`: the whole table is six
-/// columns of data this program would throw away, and a column walk is
-/// the shape the library is built for (`walk_bulk` over one column).
+/// Column walks rather than one walk of `ifEntry`: the whole table is
+/// dozens of columns of data this program would throw away.
 fn sample(
   session : @session.Session[@transport.Transport],
+  wide : Bool,
 ) -> Array[Counters] raise {
   let names = session.walk_bulk(@mib.if_descr(), 25, 500)
-  let ins = session.walk_bulk(@mib.if_in_octets(), 25, 500)
-  let outs = session.walk_bulk(@mib.if_out_octets(), 25, 500)
+  let in_column = if wide {
+    @mib.if_hc_in_octets()
+  } else {
+    @mib.if_in_octets()
+  }
+  let out_column = if wide {
+    @mib.if_hc_out_octets()
+  } else {
+    @mib.if_out_octets()
+  }
+  let ins = session.walk_bulk(in_column, 25, 500)
+  let outs = session.walk_bulk(out_column, 25, 500)
   let out : Array[Counters] = []
   for entry in ins {
     match last_arc(entry.name) {
       Some(index) =>
-        match entry.value {
-          @ber.BerValue::Counter32(in_octets) =>
-            match counter_at(outs, index) {
+        match counter_value(entry.value, wide) {
+          Some(in_octets) =>
+            match counter_at(outs, index, wide) {
               Some(out_octets) =>
                 out.push({
                   index,
@@ -135,9 +159,9 @@ fn sample(
               // is not something to guess about.
               None => ()
             }
-          // Anything but a Counter32 means this is not an octet counter,
-          // whatever the OID says.
-          _ => ()
+          // Anything but the counter type this column should carry means
+          // it is not an octet counter, whatever the OID says.
+          None => ()
         }
       None => ()
     }
@@ -183,13 +207,29 @@ fn descr_at(names : Array[@session.WalkEntry], index : UInt) -> String {
 }
 
 ///|
-fn counter_at(entries : Array[@session.WalkEntry], index : UInt) -> UInt? {
+/// A counter as a 64-bit value, whichever width the column carries.
+fn counter_value(value : @ber.BerValue, wide : Bool) -> UInt64? {
+  if wide {
+    match value {
+      @ber.BerValue::Counter64(n) => Some(n)
+      _ => None
+    }
+  } else {
+    match value {
+      @ber.BerValue::Counter32(n) => Some(n.to_uint64())
+      _ => None
+    }
+  }
+}
+
+///|
+fn counter_at(
+  entries : Array[@session.WalkEntry],
+  index : UInt,
+  wide : Bool,
+) -> UInt64? {
   match entry_at(entries, index) {
-    Some(e) =>
-      match e.value {
-        @ber.BerValue::Counter32(n) => Some(n)
-        _ => None
-      }
+    Some(e) => counter_value(e.value, wide)
     None => None
   }
 }
@@ -205,11 +245,24 @@ fn find_counters(entries : Array[Counters], index : UInt) -> Counters? {
 }
 
 ///|
+/// The difference at the width the counter actually has: a 32-bit value
+/// promoted to 64 bits still wraps at 32, so the two cannot share one
+/// subtraction.
+fn counter_delta(earlier : UInt64, later : UInt64, wide : Bool) -> UInt64 {
+  if wide {
+    @mib.counter64_delta(earlier, later)
+  } else {
+    @mib.counter_delta(earlier.to_uint(), later.to_uint()).to_uint64()
+  }
+}
+
+///|
 /// Pair up two samples and divide.
 fn rates_between(
   first : Array[Counters],
   second : Array[Counters],
   elapsed_ms : Int64,
+  wide : Bool,
 ) -> Array[Rate] {
   let ms = if elapsed_ms <= 0L { 1L } else { elapsed_ms }
   let out : Array[Rate] = []
@@ -219,9 +272,9 @@ fn rates_between(
         // Octets to bits, then over the time that actually passed.
         // Integer arithmetic throughout: a float here would only add
         // rounding of its own.
-        let bits_in = @mib.counter_delta(a.in_octets, b.in_octets).to_int64() *
+        let bits_in = counter_delta(a.in_octets, b.in_octets, wide).reinterpret_as_int64() *
           8L
-        let bits_out = @mib.counter_delta(a.out_octets, b.out_octets).to_int64() *
+        let bits_out = counter_delta(a.out_octets, b.out_octets, wide).reinterpret_as_int64() *
           8L
         out.push({
           index: a.index,
@@ -239,13 +292,21 @@ fn rates_between(
 }
 
 ///|
-fn print_rates(rates : Array[Rate]) -> Unit {
+fn print_rates(rates : Array[Rate], wide : Bool) -> Unit {
   if rates.length() == 0 {
     println(
       "no interface counters came back: an agent that does not implement ifTable, or a device with no interfaces?",
     )
     return
   }
+  // Saying which counters were read is the difference between a number
+  // and a number a reader can trust.
+  let source = if wide {
+    "64-bit (ifHCInOctets / ifHCOutOctets)"
+  } else {
+    "32-bit (ifInOctets / ifOutOctets, wraps every 4 GiB)"
+  }
+  println("counters  \{source}\n")
   println(
     "\{@common.pad("index", 5)}  \{@common.pad("interface", 20)}  \{@common.pad_left("in", 12)}  \{@common.pad_left("out", 12)}",
   )

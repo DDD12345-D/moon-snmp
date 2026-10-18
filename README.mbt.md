@@ -45,7 +45,7 @@ module default, so no flag is required.
 | `examples/walk_table` | `walk_bulk` — walk a MIB table and turn it into rows. |
 | `examples/trap_listener` | `Receiver` — listen for v1/v2c traps and informs. |
 | `examples/trap_listener_v3` | `Receiver::v3` — the same, as a v3 user, printing which engine each notification came from. |
-| `examples/interface_rates` | `walk_bulk` over the interface counters — two samples, and the difference is a rate. |
+| `examples/interface_rates` | `walk_bulk` over the interface counters — the 64-bit `ifXTable` ones, falling back to the 32-bit columns on old devices; two samples, and the difference is a rate. |
 
 `examples/query` against a net-snmp agent:
 
