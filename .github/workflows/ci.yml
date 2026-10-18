@@ -105,6 +105,13 @@ jobs:
             127.0.0.1 public "$AGENT_PORT" 1 | tee /tmp/rates.log
           grep -q 'interface' /tmp/rates.log
           grep -Eq '^[0-9]+ +' /tmp/rates.log
+          # The counters the rates were divided from, straight from the
+          # agent: a zero rate is then readable as "the link was idle"
+          # rather than as a parsing mistake on our side.
+          docker run --rm --add-host=host.docker.internal:host-gateway \
+            "$E2E_IMAGE" snmpget -v2c -c public -On \
+            host.docker.internal:"$AGENT_PORT" \
+            1.3.6.1.2.1.2.2.1.10.2 1.3.6.1.2.1.2.2.1.16.2
 
       - name: Run the v3 suite against it
         # The same agent, as a v3 user: discovery, then the same question
