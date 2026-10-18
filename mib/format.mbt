@@ -197,7 +197,11 @@ fn is_printable(bytes : Bytes) -> Bool {
 
 ///|
 /// Lowercase hex, no separators.
-fn hex_string(bytes : Bytes) -> String {
+///
+/// Engine ids are the case this exists for: they are binary by design
+/// (RFC 3411 §5), so a log line or a usage message has to show them as
+/// octets rather than guess at a text encoding.
+pub fn hex_string(bytes : Bytes) -> String {
   let out : Array[String] = []
   for i in 0..<bytes.length() {
     out.push(hex_byte(bytes.at(i).to_uint().reinterpret_as_int()))

@@ -35,7 +35,7 @@ test "build and render sysDescr.0" {
 }
 ```
 
-Three complete programs under [`examples/`](examples), each runnable
+Four complete programs under [`examples/`](examples), each runnable
 against a real device. They need the JavaScript target, which is the
 module default, so no flag is required.
 
@@ -43,7 +43,8 @@ module default, so no flag is required.
 | --- | --- |
 | `examples/query` | `get_many` — read a device's identity in one round trip. |
 | `examples/walk_table` | `walk_bulk` — walk a MIB table and turn it into rows. |
-| `examples/trap_listener` | `Receiver` — listen for traps and informs. |
+| `examples/trap_listener` | `Receiver` — listen for v1/v2c traps and informs. |
+| `examples/trap_listener_v3` | `Receiver::v3` — the same, as a v3 user, printing which engine each notification came from. |
 
 `examples/query` against a net-snmp agent:
 
@@ -164,8 +165,9 @@ fn read_over_v3() -> Unit raise {
 Changing the password to something wrong gives `SnmpError::Security`
 rather than silence, and `@snmpv3.report_meaning(oid)` says which counter
 the agent incremented — a wrong digest, an unknown user, or a clock too
-far out of step. `examples/trap_listener` stays v2c; the v3 suite in
-`e2e/v3query` is the worked example for this.
+far out of step. `examples/trap_listener_v3` is this listening end written
+out, and the v3 suite in `e2e/v3query` is what drives the same path
+against net-snmp.
 
 The same client writes and walks as well. `set` sends a SetRequest; the
 agent's access rules for that user decide whether it lands, so a
