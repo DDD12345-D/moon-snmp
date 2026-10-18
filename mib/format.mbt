@@ -196,6 +196,41 @@ fn is_printable(bytes : Bytes) -> Bool {
 }
 
 ///|
+/// How far a Counter32 moved between two reads.
+///
+/// RFC 2578 §7.1.6 has a Counter32 wrap at 2^32 and defines a difference
+/// modulo 2^32 for exactly that reason. Unsigned subtraction here is
+/// already modulo 2^32, so the wrap needs no special case: a 10G
+/// interface, which can wrap in under four seconds, goes through the same
+/// line as an idle one.
+pub fn counter_delta(earlier : UInt, later : UInt) -> UInt {
+  later - earlier
+}
+
+///|
+/// A one-decimal number, for a rate that does not need more.
+fn one_decimal(whole : Int64, tenth : Int64) -> String {
+  "\{whole}.\{tenth}"
+}
+
+///|
+/// A bit rate in the unit a person reads: `9.2 Gb/s`, `12.5 Mb/s`,
+/// `1.5 kb/s`, `300 b/s`.
+pub fn format_bit_rate(bits_per_second : Int64) -> String {
+  if bits_per_second < 0L {
+    "?"
+  } else if bits_per_second >= 1_000_000_000L {
+    "\{one_decimal(bits_per_second / 1_000_000_000L, bits_per_second % 1_000_000_000L / 100_000_000L)} Gb/s"
+  } else if bits_per_second >= 1_000_000L {
+    "\{one_decimal(bits_per_second / 1_000_000L, bits_per_second % 1_000_000L / 100_000L)} Mb/s"
+  } else if bits_per_second >= 1_000L {
+    "\{one_decimal(bits_per_second / 1_000L, bits_per_second % 1_000L / 100L)} kb/s"
+  } else {
+    "\{bits_per_second} b/s"
+  }
+}
+
+///|
 /// Lowercase hex, no separators.
 ///
 /// Engine ids are the case this exists for: they are binary by design

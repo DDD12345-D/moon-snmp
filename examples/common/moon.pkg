@@ -5,5 +5,10 @@ import {
 }
 
 options(
-  targets: { "exit_js.mbt": [ "js" ], "exit_nonjs.mbt": [ "not", "js" ] },
+  targets: {
+    "exit_js.mbt": [ "js" ],
+    "exit_nonjs.mbt": [ "not", "js" ],
+    "clock_js.mbt": [ "js" ],
+    "clock_nonjs.mbt": [ "not", "js" ],
+  },
 )

@@ -15,7 +15,7 @@ so far.
 | `transport` | done | A synchronous UDP transport for the JavaScript backend, IPv4 and IPv6 (`open` and `open_ipv6`), plus the datagram and error types. Each socket gets its own worker thread behind a `SharedArrayBuffer`, so `send`/`recv` block the way a request/reply client wants and a process can hold several sockets. A socket belongs to one family; everything above this layer takes a `Transport` value, so sessions, v3 clients and receivers work over either without knowing. |
 | `session` | done | Both halves of the conversation. As a client: `get`, `get_many`, `get_next`, `get_bulk`, `set` and `walk` / `walk_bulk` over v1, v2c and v3, with timeout, retry and stray-reply handling. As a notification originator: `trap_v1`, `trap_v2`, v3 traps and informs. As a receiver: `Receiver` for v1/v2c and `Receiver::v3`, which answers engine discovery and acknowledges informs. |
 | `snmpv3` | done | SNMPv3 messages (RFC 3412) and the User-based Security Model (RFC 3414): engine discovery, key localization, HMAC-MD5-96 / HMAC-SHA-96 authentication, and AES-128 privacy (RFC 3826). DES is deliberately absent. |
-| `mib` | done | Well-known OIDs (MIB-II groups and scalars, the ifTable columns, the snmpTraps group) and value formatting: TimeTicks as `1:07:55.67`, interface status/type enums, IP and MAC addresses, and hex for non-printable byte strings. |
+| `mib` | done | Well-known OIDs (MIB-II groups and scalars, the ifTable columns, the snmpTraps group) and value formatting: TimeTicks as `1:07:55.67`, interface status/type enums, IP and MAC addresses, hex for non-printable byte strings, and the two pieces a rate needs — a Counter32 difference that survives the 2^32 wrap, and a bit rate in the unit a person reads. |
 
 ## Examples
 
@@ -35,7 +35,7 @@ test "build and render sysDescr.0" {
 }
 ```
 
-Four complete programs under [`examples/`](examples), each runnable
+Five complete programs under [`examples/`](examples), each runnable
 against a real device. They need the JavaScript target, which is the
 module default, so no flag is required.
 
@@ -45,6 +45,7 @@ module default, so no flag is required.
 | `examples/walk_table` | `walk_bulk` — walk a MIB table and turn it into rows. |
 | `examples/trap_listener` | `Receiver` — listen for v1/v2c traps and informs. |
 | `examples/trap_listener_v3` | `Receiver::v3` — the same, as a v3 user, printing which engine each notification came from. |
+| `examples/interface_rates` | `walk_bulk` over the interface counters — two samples, and the difference is a rate. |
 
 `examples/query` against a net-snmp agent:
 
