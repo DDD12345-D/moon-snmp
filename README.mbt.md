@@ -47,6 +47,49 @@ module default, so no flag is required.
 | `examples/trap_listener_v3` | `Receiver::v3` — the same, as a v3 user, printing which engine each notification came from. |
 | `examples/interface_rates` | `walk_bulk` over the interface counters — the 64-bit `ifXTable` ones, falling back to the 32-bit columns on old devices; two samples, and the difference is a rate. |
 
+### Try it without a device
+
+The examples want an agent; the fixture the end-to-end tests use is the
+quickest way to get one. Two commands start it on port 16161:
+
+```sh
+docker build -t moon-snmp-e2e e2e/docker
+docker run -d --name agent -p 16161:161/udp moon-snmp-e2e
+```
+
+Then, from the repository root:
+
+```sh
+moon run examples/query -- 127.0.0.1 public 16161
+moon run examples/walk_table -- 127.0.0.1 public 16161
+moon run examples/interface_rates -- 127.0.0.1 public 16161 5
+```
+
+The two listeners print whatever arrives and stop when nothing does, so
+they get a sender of their own — port 1162 and 1163, because 162 needs
+privileges on most systems:
+
+```sh
+moon run examples/trap_listener -- 1162
+moon run examples/trap_listener_v3 -- 1163 monitor authpass privpass
+```
+
+```sh
+docker run --rm --add-host=host.docker.internal:host-gateway \
+  moon-snmp-e2e snmptrap -v 2c -c public \
+  host.docker.internal:1162 '' 1.3.6.1.6.3.1.1.5.4
+
+docker run --rm --add-host=host.docker.internal:host-gateway \
+  moon-snmp-e2e snmptrap -v3 -u monitor -l authPriv -a SHA -A authpass \
+  -x AES -X privpass host.docker.internal:1163 '' 1.3.6.1.6.3.1.1.5.4
+```
+
+`docker rm -f agent` when done.
+
+Every sample below is against a device of your own; the addresses are
+documentation addresses, so they print nothing until you put a real one
+there.
+
 `examples/query` against a net-snmp agent:
 
 ```console
@@ -316,10 +359,14 @@ socket. `e2e/` drives a real net-snmp implementation instead:
 ```sh
 docker build -t moon-snmp-e2e e2e/docker
 
-# Against an agent: 28 checks covering get/get_next/get_bulk, walk and
-# walk_bulk, the v2c exceptions, and a wrong community.
+# Against an agent: 31 checks covering get/get_next/get_bulk, walk and
+# walk_bulk, the v2c exceptions, a wrong community, and a liveness probe.
 docker run -d --name agent -p 16161:161/udp moon-snmp-e2e
 moon run e2e/query --target js -- 127.0.0.1 16161
+
+# The same agent over v3: 28 checks across noAuthNoPriv, MD5, SHA-1 and
+# SHA-1 + AES-128, including set, walk and the clock window.
+moon run e2e/v3query --target js -- 127.0.0.1 16161
 
 # Loopback: five notifications from one socket to another in one
 # process, back to back. No docker needed, and it is the check that
@@ -334,6 +381,13 @@ moon run e2e/notify --target js -- recv 16162 3
 docker run --rm --add-host=host.docker.internal:host-gateway \
   moon-snmp-e2e snmptrap -v 2c -c public \
   host.docker.internal:16162 '' 1.3.6.1.6.3.1.1.5.1
+
+# The sending direction over v3, where the sender and the receiver
+# disagree about whose engine is authoritative. The reverse — a v3 trap
+# and an inform arriving here — needs a sender, which is what the
+# notifications job in CI drives.
+moon run e2e/notify --target js -- send-v3 127.0.0.1 16162
+docker rm -f agent trapd
 ```
 
 Each harness exits non-zero when a check fails, so CI reads a status
