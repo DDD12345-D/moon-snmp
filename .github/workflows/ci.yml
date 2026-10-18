@@ -102,7 +102,7 @@ jobs:
         # a row is the assertion.
         run: |
           moon run examples/interface_rates --target js -- \
-            127.0.0.1 public "$AGENT_PORT" 1 | tee /tmp/rates.log
+            127.0.0.1 public "$AGENT_PORT" 5 | tee /tmp/rates.log
           grep -q 'interface' /tmp/rates.log
           grep -Eq '^[0-9]+ +' /tmp/rates.log
           # The counters the rates were divided from, straight from the

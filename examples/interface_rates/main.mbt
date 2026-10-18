@@ -6,11 +6,14 @@
 ///
 /// `ifInOctets` and `ifOutOctets` are Counter32: octets since the
 /// interface came up, not a rate. A rate is two reads and a division, and
-/// two things make it wrong if they are not handled: the counter wraps at
-/// 2^32 — a busy 10G port does that in under four seconds — and the
-/// interface list can change between the reads. The first is handled in
-/// `@mib.counter_delta`, the second by dropping interfaces that disappear
-/// instead of pairing them with a lookalike.
+/// three things make it wrong if they are not handled. The counter wraps
+/// at 2^32 — a busy 10G port does that in under four seconds — which is
+/// `@mib.counter_delta`'s job. The interface list can change between the
+/// reads, so a disappearing interface is dropped rather than paired with
+/// a lookalike. And an agent caches its interface table: net-snmp serves
+/// ifTable from a cache of a few seconds, so two reads a second apart
+/// return the same counters and honestly report zero. The default
+/// interval is five seconds for that reason, not for round numbers.
 
 ///|
 /// One interface's counters, as one sample found them.
@@ -35,8 +38,9 @@ fn main {
   let cli = @common.Cli::read()
   let target = cli.target()
   // Seconds, because that is what a person types; the socket counts
-  // milliseconds.
-  let interval = cli.number(5, 2)
+  // milliseconds. Five by default: shorter than an agent's ifTable cache
+  // reads the same counters twice and reports zero.
+  let interval = cli.number(5, 5)
   println(
     "sampling \{target.host}:\{target.port} over \{interval}s (community \"\{@utf8.decode_lossy(target.community)}\")\n",
   )
