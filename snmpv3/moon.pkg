@@ -4,6 +4,7 @@ import {
   "moonbitstack/mooncrypt/cipher/aes",
   "moonbitstack/mooncrypt/hash/md5",
   "moonbitstack/mooncrypt/hash/sha1",
+  "moonbitstack/mooncrypt/hash/sha2",
   "moonbitstack/mooncrypt/mac/hmac",
   "moonbitstack/mooncrypt/spec",
   "DDD12345-D/moon-snmp/ber",

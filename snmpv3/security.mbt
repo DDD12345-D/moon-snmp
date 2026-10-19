@@ -18,10 +18,21 @@
 pub(all) enum AuthProtocol {
   /// No authentication.
   None
-  /// HMAC-MD5-96 (RFC 3414 §6).
+  /// HMAC-MD5-96 (RFC 3414 §6). Deprecated by RFC 7860 §1, kept because
+  /// devices in the field still use it.
   Md5
-  /// HMAC-SHA-96 (RFC 3414 §7).
+  /// HMAC-SHA-96 (RFC 3414 §7). Also deprecated, for the same reason.
   Sha1
+  /// HMAC-SHA-224 truncated to 16 octets (RFC 7860 §5).
+  Sha224
+  /// HMAC-SHA-256 truncated to 24 octets — the one RFC 7860 §1 says
+  /// implementations SHOULD support.
+  Sha256
+  /// HMAC-SHA-384 truncated to 32 octets.
+  Sha384
+  /// HMAC-SHA-512 truncated to 48 octets — the other one RFC 7860 §1
+  /// says SHOULD.
+  Sha512
 } derive(Eq, @debug.Debug)
 
 ///|
@@ -86,6 +97,39 @@ pub extend Keys with Eq::{not_equal, equal}
 pub extend Keys with @debug.Debug::{to_repr}
 
 ///|
+/// How many octets of the digest become the message authenticator.
+///
+/// RFC 3414 fixes this at twelve for both of its protocols; RFC 7860
+/// truncates to 16, 24, 32 and 48 octets, and the field on the wire is
+/// exactly that long. Nothing may be assumed about the length without
+/// asking the protocol.
+pub fn AuthProtocol::auth_param_length(self : AuthProtocol) -> Int {
+  match self {
+    None => 0
+    Md5 | Sha1 => 12
+    Sha224 => 16
+    Sha256 => 24
+    Sha384 => 32
+    Sha512 => 48
+  }
+}
+
+///|
+/// The size of the key the password is stretched and localized to: the
+/// digest size of the hash (RFC 3414 §2.6, RFC 7860 §9.3).
+pub fn AuthProtocol::key_length(self : AuthProtocol) -> Int {
+  match self {
+    None => 0
+    Md5 => 16
+    Sha1 => 20
+    Sha224 => 28
+    Sha256 => 32
+    Sha384 => 48
+    Sha512 => 64
+  }
+}
+
+///|
 /// RFC 3414 §2.6 and A.2.1: the password is stretched to one megabyte by
 /// repetition and hashed, and the result is combined with the engine id
 /// to make a key that is useless on any other engine.
@@ -99,8 +143,7 @@ pub fn Security::localize(
 ) -> Keys raise V3Error {
   let auth_key = match self.auth_protocol {
     None => b""
-    Md5 => localize_with(self.auth_password, engine_id, Md5)
-    Sha1 => localize_with(self.auth_password, engine_id, Sha1)
+    protocol => localize_with(self.auth_password, engine_id, protocol)
   }
   let priv_key = match self.priv_protocol {
     None => b""
@@ -163,6 +206,10 @@ fn hash_of(protocol : AuthProtocol, message : Bytes) -> Bytes raise V3Error {
     None => raise V3Error::NotReady("no hash for an unauthenticated session")
     Md5 => @md5.hash(message)
     Sha1 => @sha1.hash(message)
+    Sha224 => @sha2.hash(message, kind=@sha2.Sha224)
+    Sha256 => @sha2.hash(message, kind=@sha2.Sha256)
+    Sha384 => @sha2.hash(message, kind=@sha2.Sha384)
+    Sha512 => @sha2.hash(message, kind=@sha2.Sha512)
   }
 }
 
@@ -173,6 +220,10 @@ fn hasher_of(protocol : AuthProtocol) -> (() -> &@spec.Hash) raise V3Error {
     None => raise V3Error::NotReady("no hash for an unauthenticated session")
     Md5 => md5_hasher
     Sha1 => sha1_hasher
+    Sha224 => sha224_hasher
+    Sha256 => sha256_hasher
+    Sha384 => sha384_hasher
+    Sha512 => sha512_hasher
   }
 }
 
@@ -187,6 +238,26 @@ fn sha1_hasher() -> &@spec.Hash {
 }
 
 ///|
+fn sha224_hasher() -> &@spec.Hash {
+  @sha2.Hasher::new(kind=@sha2.Sha224)
+}
+
+///|
+fn sha256_hasher() -> &@spec.Hash {
+  @sha2.Hasher::new(kind=@sha2.Sha256)
+}
+
+///|
+fn sha384_hasher() -> &@spec.Hash {
+  @sha2.Hasher::new(kind=@sha2.Sha384)
+}
+
+///|
+fn sha512_hasher() -> &@spec.Hash {
+  @sha2.Hasher::new(kind=@sha2.Sha512)
+}
+
+///|
 /// The message authenticator: HMAC truncated to twelve octets (RFC 3414
 /// §6.3.1 and §6.3.2 — SHA-1's digest is longer, and the extra is
 /// dropped).
@@ -196,7 +267,7 @@ pub fn auth_digest(
   message : Bytes,
 ) -> Bytes raise V3Error {
   let full = @hmac.mac(key, message, hasher_of(protocol))
-  Bytes::from_array(full.to_array()[:AUTH_PARAM_LENGTH])
+  Bytes::from_array(full.to_array()[:protocol.auth_param_length()])
 }
 
 ///|
@@ -327,9 +398,10 @@ pub fn sign(
   key : Bytes,
 ) -> Bytes raise V3Error {
   let span = auth_field_span(message)
-  if span.end - span.start != AUTH_PARAM_LENGTH {
+  let expected = protocol.auth_param_length()
+  if span.end - span.start != expected {
     raise V3Error::Malformed(
-      "the authenticator field is \{span.end - span.start} octets, not \{AUTH_PARAM_LENGTH}",
+      "the authenticator field is \{span.end - span.start} octets, not \{expected}",
     )
   }
   let out = message.to_array()
@@ -362,8 +434,8 @@ pub fn verify(
   key : Bytes,
 ) -> Bool raise V3Error {
   let span = auth_field_span(message)
-  if span.end - span.start != AUTH_PARAM_LENGTH {
-    // No room for an authenticator: the message is not signed.
+  if span.end - span.start != protocol.auth_param_length() {
+    // No room for this protocol's authenticator: not signed that way.
     return false
   }
   let received = Bytes::from_array(message.to_array()[span.start:span.end])

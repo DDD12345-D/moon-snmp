@@ -66,6 +66,48 @@ fn sha_user() -> @snmpv3.Security {
 }
 
 ///|
+/// Authenticated with HMAC-SHA-256, not encrypted (RFC 7860).
+fn sha256_user() -> @snmpv3.Security {
+  {
+    level: @snmpv3.AuthNoPriv,
+    user: b"e2e-sha256",
+    auth_protocol: @snmpv3.Sha256,
+    auth_password: b"sha256authpass",
+    priv_protocol: @snmpv3.None,
+    priv_password: b"",
+  }
+}
+
+///|
+/// Authenticated with HMAC-SHA-512 (RFC 7860): a 48-octet
+/// authenticator, four times the width MD5 uses.
+fn sha512_user() -> @snmpv3.Security {
+  {
+    level: @snmpv3.AuthNoPriv,
+    user: b"e2e-sha512",
+    auth_protocol: @snmpv3.Sha512,
+    auth_password: b"sha512authpass",
+    priv_protocol: @snmpv3.None,
+    priv_password: b"",
+  }
+}
+
+///|
+/// Authenticated with HMAC-SHA-256 and encrypted, which also proves the
+/// privacy key is derived with the *authentication* hash (RFC 3414
+/// §2.6): here a SHA-2 one.
+fn sha256_priv_user() -> @snmpv3.Security {
+  {
+    level: @snmpv3.AuthPriv,
+    user: b"e2e-sha256priv",
+    auth_protocol: @snmpv3.Sha256,
+    auth_password: b"sha256authpass",
+    priv_protocol: @snmpv3.Aes128,
+    priv_password: b"sha256privpass",
+  }
+}
+
+///|
 /// Authenticated and encrypted with AES-128.
 fn priv_user() -> @snmpv3.Security {
   {
@@ -425,6 +467,54 @@ fn run(
   checks.that(
     "authPriv walk_bulk returns the same OIDs in the same order",
     walk_names(bulked) == walk_names(walked),
+  )
+
+  // 14. The SHA-2 family (RFC 7860). The authenticator is no longer
+  //     twelve octets — 24 for SHA-256, 48 for SHA-512 — so this is also
+  //     the check that the field width follows the protocol rather than
+  //     a constant. Nothing here is shaped differently from the SHA-1
+  //     case above; the agent is what makes it a real test.
+  let sha256 : @session.V3Client[@transport.Transport] = @session.V3Client::new(
+    socket,
+    host,
+    port,
+    sha256_user(),
+    TIMEOUT_MS,
+    RETRIES,
+  )
+  sha256.discover()
+  checks.text(
+    "authNoPriv with HMAC-SHA-256 reads sysName.0",
+    string_of(sha256.get(sys_name)),
+    "moon-snmp-test-agent",
+  )
+  let sha512 : @session.V3Client[@transport.Transport] = @session.V3Client::new(
+    socket,
+    host,
+    port,
+    sha512_user(),
+    TIMEOUT_MS,
+    RETRIES,
+  )
+  sha512.discover()
+  checks.text(
+    "authNoPriv with HMAC-SHA-512 reads sysName.0",
+    string_of(sha512.get(sys_name)),
+    "moon-snmp-test-agent",
+  )
+  let sha256_priv : @session.V3Client[@transport.Transport] = @session.V3Client::new(
+    socket,
+    host,
+    port,
+    sha256_priv_user(),
+    TIMEOUT_MS,
+    RETRIES,
+  )
+  sha256_priv.discover()
+  checks.text(
+    "authPriv with SHA-256 and AES-128 reads sysName.0",
+    string_of(sha256_priv.get(sys_name)),
+    "moon-snmp-test-agent",
   )
 }
 

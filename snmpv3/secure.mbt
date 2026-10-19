@@ -77,7 +77,12 @@ pub fn seal(
     protocol => {
       // The authenticator is computed over the message with its own field
       // blanked, so the field has to be the right width before signing.
-      let blank = { ..encrypted, auth_params: zeros(AUTH_PARAM_LENGTH), }
+      // The field is as wide as the protocol's authenticator: twelve
+      // octets for RFC 3414's two, 16 to 48 for the SHA-2 family.
+      let blank = {
+        ..encrypted,
+        auth_params: zeros(protocol.auth_param_length()),
+      }
       sign(blank.encode(), protocol, keys.auth_key)
     }
   }
