@@ -14,7 +14,7 @@ so far.
 | `pdu` | done | SNMP messages and PDUs for v1 and v2c: versions, the nine PDU types, error-status codes, var-binds, and the encode/decode of `SEQUENCE { version, community, PDU }`. |
 | `transport` | done | A synchronous UDP transport for the JavaScript backend, IPv4 and IPv6 (`open` and `open_ipv6`), plus the datagram and error types. Each socket gets its own worker thread behind a `SharedArrayBuffer`, so `send`/`recv` block the way a request/reply client wants and a process can hold several sockets. A socket belongs to one family; everything above this layer takes a `Transport` value, so sessions, v3 clients and receivers work over either without knowing. |
 | `session` | done | Both halves of the conversation. As a client: `get`, `get_many`, `get_next`, `get_bulk`, `set` and `walk` / `walk_bulk` over v1, v2c and v3, with timeout, retry and stray-reply handling. As a notification originator: `trap_v1`, `trap_v2`, v3 traps and informs. As a receiver: `Receiver` for v1/v2c and `Receiver::v3`, which answers engine discovery and acknowledges informs. |
-| `snmpv3` | done | SNMPv3 messages (RFC 3412) and the User-based Security Model (RFC 3414): engine discovery, key localization, HMAC-MD5-96 / HMAC-SHA-96 authentication, and AES-128 privacy (RFC 3826). DES is deliberately absent. |
+| `snmpv3` | done | SNMPv3 messages (RFC 3412) and the User-based Security Model (RFC 3414): engine discovery, key localization, HMAC-MD5-96 / HMAC-SHA-96, and the SHA-2 family with its truncated authenticators (RFC 7860), plus AES-128 privacy (RFC 3826). DES is deliberately absent, and so are MD5/SHA-1 in new deployments — they are here because devices in the field still use them. |
 | `mib` | done | Well-known OIDs (MIB-II groups and scalars, the ifTable columns, the snmpTraps group) and value formatting: TimeTicks as `1:07:55.67`, interface status/type enums, IP and MAC addresses, hex for non-printable byte strings, and the two pieces a rate needs — a Counter32 difference that survives the 2^32 wrap, and a bit rate in the unit a person reads. |
 
 ## Examples
@@ -171,6 +171,14 @@ it can authenticate anything — the keys are derived from the engine id,
 and an authenticator is only accepted if the clock is close to the
 agent's.
 
+Authentication comes in two generations. RFC 3414 defines HMAC-MD5-96
+and HMAC-SHA-96, and RFC 7860 deprecates both in favour of the SHA-2
+family — HMAC-SHA-224/256/384/512 with authenticators truncated to 16, 24,
+32 and 48 octets. All six are here: `Sha256` and `Sha512` are what new
+deployments should use, and MD5 and SHA-1 stay because devices in the
+field still ask for them. The authenticator's width follows the protocol,
+so nothing above this layer needs to know which one is in use.
+
 That clock is not a one-off handshake value. Every authenticated message
 carries the sender's engine time, and both ends refuse a message more
 than 150 seconds away from the clock they hold (RFC 3414 §3.2) — which is
@@ -188,7 +196,7 @@ fn read_over_v3() -> Unit raise {
   let security : @snmpv3.Security = {
     level: @snmpv3.AuthPriv,
     user: b"monitor",
-    auth_protocol: @snmpv3.Sha1,
+    auth_protocol: @snmpv3.Sha256,
     auth_password: b"authpass",
     priv_protocol: @snmpv3.Aes128,
     priv_password: b"privpass",
@@ -272,7 +280,7 @@ fn report_over_v3() -> Unit raise {
   let security : @snmpv3.Security = {
     level: @snmpv3.AuthPriv,
     user: b"monitor",
-    auth_protocol: @snmpv3.Sha1,
+    auth_protocol: @snmpv3.Sha256,
     auth_password: b"authpass",
     priv_protocol: @snmpv3.Aes128,
     priv_password: b"privpass",
@@ -364,8 +372,9 @@ docker build -t moon-snmp-e2e e2e/docker
 docker run -d --name agent -p 16161:161/udp moon-snmp-e2e
 moon run e2e/query --target js -- 127.0.0.1 16161
 
-# The same agent over v3: 28 checks across noAuthNoPriv, MD5, SHA-1 and
-# SHA-1 + AES-128, including set, walk and the clock window.
+# The same agent over v3: 31 checks across noAuthNoPriv, MD5, SHA-1,
+# SHA-1 + AES-128, SHA-256, SHA-512 and SHA-256 + AES-128, including set,
+# walk and the clock window.
 moon run e2e/v3query --target js -- 127.0.0.1 16161
 
 # Loopback: five notifications from one socket to another in one
