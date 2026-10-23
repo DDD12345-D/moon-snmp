@@ -405,6 +405,16 @@ moon run e2e/query --target js -- 127.0.0.1 16161
 # walk and the clock window.
 moon run e2e/v3query --target js -- 127.0.0.1 16161
 
+# Both suites again over IPv6. The socket family follows the address, so
+# these need nothing but a port published on `::1` — including the v3
+# run, whose discovery, key localization, HMAC and AES all happen over
+# the v6 socket.
+docker rm -f agent
+docker run -d --name agent -p 16161:161/udp -p "[::1]:16161:161/udp" \
+  moon-snmp-e2e
+moon run e2e/query   --target js -- ::1 16161
+moon run e2e/v3query --target js -- ::1 16161
+
 # Loopback: five notifications from one socket to another in one
 # process, back to back. No docker needed, and it is the check that
 # catches a transport dropping or duplicating datagrams.

@@ -85,7 +85,7 @@ fn main {
 fn run_suite(checks : @support.Checks, host : String, port : Int) -> Unit raise {
   // One socket shared by both sessions, which is how a real program
   // uses this: a client is a conversation, not a socket.
-  let socket = @transport.Transport::open(0, 3000)
+  let socket = @support.open_endpoint(host)
   let session = @session.Session::new(
     socket,
     host,

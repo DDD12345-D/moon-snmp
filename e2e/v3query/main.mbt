@@ -129,11 +129,11 @@ fn main {
   let checks = @support.Checks::new()
   // Opening a socket can fail, and `main` cannot raise, so the failure is
   // turned into a check like any other rather than into a stack trace.
-  let socket = @transport.Transport::open(0, 3000) catch {
+  let socket = @support.open_endpoint(host) catch {
     e => {
       checks.bad("a socket could be opened", Repr(e).to_string())
       checks.finish("v3 suite")
-      @transport.Transport::open(0, 1) catch {
+      @support.open_endpoint(host) catch {
         _ => abort("unreachable")
       }
     }

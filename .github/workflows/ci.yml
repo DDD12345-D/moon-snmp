@@ -22,6 +22,8 @@ env:
   AGENT_PORT: 16161
   # The same for the notification receiver.
   TRAP_PORT: 16162
+  # And the port the agent also publishes on IPv6, for the v6 runs.
+  AGENT_PORT_V6: 16171
 
 jobs:
   format:
@@ -71,7 +73,13 @@ jobs:
 
       - name: Start the agent
         run: |
-          docker run -d --name agent -p "$AGENT_PORT":161/udp "$E2E_IMAGE"
+          # Published on both families: the v4 mapping is what the
+          # harness uses by default, the v6 one proves the same suites
+          # work over an AF_INET6 socket.
+          docker run -d --name agent \
+            -p "$AGENT_PORT":161/udp \
+            -p "[::1]:$AGENT_PORT_V6":161/udp \
+            "$E2E_IMAGE"
           # Wait until it answers rather than sleeping a guessed amount,
           # so a slow runner does not turn into a flaky failure. snmpget
           # comes from the same image, which also proves the image works.
@@ -122,6 +130,15 @@ jobs:
         # e2e/docker/snmpd.conf, so the image and the harness have to
         # agree — which is the sort of thing a test should notice.
         run: moon run e2e/v3query -- 127.0.0.1 "$AGENT_PORT"
+
+      - name: Run both suites over IPv6
+        # The same two suites, pointed at `::1`. Nothing in the library
+        # changes: the family follows the address the caller named. This
+        # is the evidence behind the IPv6 claim in the README, and it
+        # covers the session layer, not just a bare datagram.
+        run: |
+          moon run e2e/query   --target js -- ::1 "$AGENT_PORT_V6"
+          moon run e2e/v3query --target js -- ::1 "$AGENT_PORT_V6"
 
       - name: Cross-check the walk against net-snmp
         # Our own suite cannot tell "walked the whole subtree" from
