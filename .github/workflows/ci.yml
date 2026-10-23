@@ -59,6 +59,11 @@ jobs:
       # packages nothing else builds, so build them here. A broken
       # example is a broken promise to whoever copies it.
       - run: moon build --target js
+      # The decoders are where a stranger's bytes meet the library, and
+      # the property that matters is "returns an error, never panics". A
+      # panic escapes every catch and kills the process, so this walks
+      # every single-byte change of two real messages plus every prefix.
+      - run: moon run e2e/fuzz --target js
 
   e2e-query:
     name: End to end / query

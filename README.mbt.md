@@ -415,6 +415,12 @@ docker run -d --name agent -p 16161:161/udp -p "[::1]:16161:161/udp" \
 moon run e2e/query   --target js -- ::1 16161
 moon run e2e/v3query --target js -- ::1 16161
 
+# Fuzz the decoders: every single-byte change of two real messages, and
+# every prefix of them, on top of random buffers. The property is that no
+# input panics — a panic escapes every catch and kills the process, so
+# for a receiver one malformed datagram would be a denial of service.
+moon run e2e/fuzz --target js
+
 # Loopback: five notifications from one socket to another in one
 # process, back to back. No docker needed, and it is the check that
 # catches a transport dropping or duplicating datagrams.
