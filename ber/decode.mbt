@@ -23,10 +23,16 @@ fn decode_at(bytes : BytesView, offset : Int) -> (BerValue, Int) raise BerError 
   let tag = bytes.at(offset).to_uint().reinterpret_as_int()
   let (content_len, length_octets) = decode_length(bytes, offset + 1)
   let start = offset + 1 + length_octets
-  let end = start + content_len
-  if end > len {
+  // `content_len` is four octets read off the wire, so anything at or
+  // above 2^31 lands here as a negative Int, and `start + content_len`
+  // can wrap. Subtracting instead of adding keeps the bound check out of
+  // overflow's way. Without this a six-byte datagram — tag 0x30, long
+  // length `84 ff ff ff ff` — walked into the view slice with a negative
+  // end and panicked the process instead of being rejected.
+  if content_len < 0 || start > len || content_len > len - start {
     raise BerError::Truncated
   }
+  let end = start + content_len
   let body = bytes.exact_view(start~, end~)
   let value = match tag {
     0x02 => BerValue::Integer(decode_integer(body))

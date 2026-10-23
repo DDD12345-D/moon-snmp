@@ -110,3 +110,22 @@ test "decode rejects malformed input" {
     expect_decode_failure(hex_text)
   }
 }
+
+///|
+test "a length wider than the buffer is rejected, not a panic" {
+  // Four octets of 0xFF is 4294967295 on the wire and -1 once read into a
+  // 32-bit Int. Adding it to the offset wrapped, so the bound check
+  // (`end > len`) passed and the view slice was taken with a negative
+  // end. Six bytes were enough to kill the process: a receiver that dies
+  // on a stranger's datagram is not a receiver. Found by fuzzing every
+  // single-byte change of a valid message.
+  expect_decode_failure("3084ffffffff")
+  expect_decode_failure("0484ffffffff")
+  // Three octets of 0xFF is 16777215: positive, and still more than the
+  // buffer holds, so it has to be caught by the same check.
+  expect_decode_failure("3083ffffff")
+  // The long form still decodes when the length is honest; the encoder
+  // then writes it back in the short form, which is what `roundtrip`
+  // compares.
+  inspect(roundtrip("308103020100"), content="3003020100")
+}
