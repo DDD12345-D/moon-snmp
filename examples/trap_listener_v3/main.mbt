@@ -141,10 +141,15 @@ fn level_name(level : @snmpv3.SecurityLevel) -> String {
 
 ///|
 fn report(number : Int, notification : @session.Notification) -> Unit {
+  // `kind` is the shape of the body, and a v3 trap uses the same shape
+  // as a v2c one — the version is what makes it v3, so the version
+  // decides the label. Printing "trap v2c" here would misname every
+  // notification this program exists to show.
+  let is_v3 = notification.version == @pdu.V3
   let kind = match notification.kind {
     @session.TrapV1 => "trap v1"
-    @session.TrapV2 => "trap v2c"
-    @session.Inform => "inform"
+    @session.TrapV2 => if is_v3 { "trap v3" } else { "trap v2c" }
+    @session.Inform => if is_v3 { "inform v3" } else { "inform v2c" }
   }
   println(
     "--- \{number}: \{kind} from \{notification.source_addr}:\{notification.source_port}",
