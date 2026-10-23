@@ -3,7 +3,7 @@
 Pure MoonBit implementation of the [SNMP](https://datatracker.ietf.org/doc/html/rfc1157) protocol client, for querying and monitoring network devices (switches, routers, printers, servers) — with no non-MoonBit code on the protocol path.
 
 The library is under active development. This README tracks what has
-landed so far; the current release is `0.3.0`.
+landed so far; the current release is `0.3.1`.
 
 ## Install
 
