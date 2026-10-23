@@ -2,8 +2,36 @@
 
 Pure MoonBit implementation of the [SNMP](https://datatracker.ietf.org/doc/html/rfc1157) protocol client, for querying and monitoring network devices (switches, routers, printers, servers) — with no non-MoonBit code on the protocol path.
 
-The library is under active development. This README tracks what has landed
-so far.
+The library is under active development. This README tracks what has
+landed so far; the current release is `0.3.0`.
+
+## Install
+
+```sh
+moon add DDD12345-D/moon-snmp
+```
+
+That puts the module in `moon.mod`. The library is one package per layer,
+so a package names the layers it needs in its own `moon.pkg` — a client
+that queries an agent wants these four:
+
+```
+import {
+  "DDD12345-D/moon-snmp/mib",
+  "DDD12345-D/moon-snmp/pdu",
+  "DDD12345-D/moon-snmp/session",
+  "DDD12345-D/moon-snmp/transport",
+}
+```
+
+Add `DDD12345-D/moon-snmp/snmpv3` for v3, and `.../ber` or `.../oid` only
+if you are working at those layers directly.
+
+Only `transport` is backend-specific: it needs the JavaScript target,
+because the MoonBit core library has no UDP. Anything that opens a socket
+runs with `--target js`, or with plain `moon run`, since the module
+declares `js` as its preferred target. The layers above it build for any
+backend.
 
 ## Packages
 
