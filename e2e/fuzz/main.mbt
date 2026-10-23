@@ -155,5 +155,193 @@ fn main {
     rounds = rounds + 1
   }
 
+  // The decryption path. A wrong key, or a corrupted ciphertext, gives
+  // arbitrary bytes that are then parsed as a scoped PDU, so the shapes
+  // below are the ones a real receiver meets rather than a hypothetical.
+  let engine : @snmpv3.Engine = {
+    id: unhex("80001f8880a32a253f0921cb6a00000000"),
+    boots: 1,
+    time: 100,
+  }
+  let security : @snmpv3.Security = {
+    level: @snmpv3.AuthPriv,
+    user: b"fuzz",
+    auth_protocol: @snmpv3.Md5,
+    auth_password: b"authpass",
+    priv_protocol: @snmpv3.Aes128,
+    priv_password: b"privpass",
+  }
+  let keys = security.localize(engine.id) catch {
+    _ => abort("the fuzz keys would not localize")
+  }
+  let salt = unhex("0000000000000001")
+
+  // `decrypt_aes` has to be total: any length of ciphertext, key held
+  // fixed. Zero length and the lengths either side of a block boundary
+  // are where its arithmetic would go wrong.
+  let mut len = 0
+  while len < 48 {
+    let ciphertext = random_bytes(state, len)
+    try {
+      let _ = @snmpv3.decrypt_aes(ciphertext, keys.priv_key, engine, salt)
+    } catch {
+      _ => ()
+    }
+    rounds = rounds + 1
+    len = len + 1
+  }
+
+  // `open` on random bytes: decode, verify, decrypt, parse — the whole
+  // chain a receiver runs on every datagram.
+  for _ in 0..<2000 {
+    let len = next(state) % 96
+    try_open(random_bytes(state, len), security, keys)
+    rounds = rounds + 1
+  }
+
+  // And on mutations of a genuinely sealed message. Mutating the
+  // ciphertext keeps the envelope intact, so the changes reach the
+  // decryption and PDU parsing instead of dying at the outer tag.
+  let envelope = seal_sample(engine, security, keys, salt) catch {
+    _ => abort("the sample message would not seal")
+  }
+  let mut at = 0
+  while at < envelope.length() {
+    let mut value = 0
+    while value < 256 {
+      let mutated = envelope.to_array()
+      mutated[at] = value.to_byte()
+      try_open(Bytes::from_array(mutated), security, keys)
+      rounds = rounds + 1
+      value = value + 1
+    }
+    at = at + 5
+  }
+
+  // Random ciphertext that *passes* authentication, which is the only
+  // way to reach the decryption: `open` verifies before it decrypts, so
+  // a mutated envelope stops at the authenticator and never gets here.
+  // Signing a message whose `data` is already encrypted does exactly
+  // that — the authenticator covers the garbage, so it is accepted, and
+  // the plaintext handed to the parser is arbitrary.
+  let mut attempt = 0
+  while attempt < 400 {
+    let ciphertext = random_bytes(state, next(state) % 72)
+    let message : @snmpv3.V3Message = {
+      msg_id: attempt + 1,
+      msg_max_size: @snmpv3.DEFAULT_MAX_SIZE,
+      flags: @snmpv3.MsgFlags::of(@snmpv3.AuthPriv),
+      security_model: @snmpv3.USM_SECURITY_MODEL,
+      engine,
+      user: b"fuzz",
+      auth_params: b"",
+      priv_params: salt,
+      data: @snmpv3.Encrypted(ciphertext),
+    }
+    let wire = @snmpv3.seal(message, security, keys, salt) catch {
+      _ => continue
+    }
+    try_open(wire, security, keys)
+    rounds = rounds + 1
+    attempt = attempt + 1
+  }
+
+  // Structurally valid BER values with the wrong shape: what decryption
+  // hands the PDU decoder when the key is right and the sender is not.
+  let shapes : Array[@ber.BerValue] = [
+    @ber.BerValue::Tagged(0xA0, []),
+    @ber.BerValue::Tagged(0xA0, [@ber.BerValue::Integer(1)]),
+    @ber.BerValue::Tagged(0xA0, [
+      @ber.BerValue::Integer(1),
+      @ber.BerValue::Integer(0),
+      @ber.BerValue::Integer(0),
+    ]),
+    @ber.BerValue::Tagged(0xA0, [
+      @ber.BerValue::OctetString(b"x"),
+      @ber.BerValue::Integer(0),
+      @ber.BerValue::Integer(0),
+      @ber.BerValue::Sequence([]),
+    ]),
+    @ber.BerValue::Tagged(0xA0, [
+      @ber.BerValue::Integer(1),
+      @ber.BerValue::Integer(999),
+      @ber.BerValue::Integer(0),
+      @ber.BerValue::Sequence([]),
+    ]),
+    @ber.BerValue::Tagged(0xA4, []),
+    @ber.BerValue::Tagged(0xA4, [
+      @ber.BerValue::Integer(1),
+      @ber.BerValue::Integer(1),
+      @ber.BerValue::Integer(1),
+      @ber.BerValue::Integer(1),
+      @ber.BerValue::Integer(1),
+    ]),
+    @ber.BerValue::Tagged(0xA5, [@ber.BerValue::Integer(1)]),
+    @ber.BerValue::Tagged(0xFF, []),
+    @ber.BerValue::Tagged(0xA2, [
+      @ber.BerValue::Integer(1),
+      @ber.BerValue::Integer(0),
+      @ber.BerValue::Integer(0),
+      @ber.BerValue::Sequence([
+        @ber.BerValue::Sequence([@ber.BerValue::Integer(1)]),
+      ]),
+    ]),
+    @ber.BerValue::Integer(1),
+    @ber.BerValue::Null,
+  ]
+  for shape in shapes {
+    try {
+      let _ = @pdu.Pdu::from_ber(shape)
+    } catch {
+      _ => ()
+    }
+    rounds = rounds + 1
+  }
+
   println("survived \{rounds} decoder rounds: no input panicked")
+}
+
+///|
+/// `open` and swallow its error, for the fuzz loops.
+fn try_open(
+  bytes : Bytes,
+  security : @snmpv3.Security,
+  keys : @snmpv3.Keys,
+) -> Unit {
+  try {
+    let _ = @snmpv3.open(bytes, security, keys)
+  } catch {
+    _ => ()
+  }
+}
+
+///|
+/// A sealed authPriv message with a few var-binds, so the ciphertext is
+/// long enough that mutations land inside the encrypted region.
+fn seal_sample(
+  engine : @snmpv3.Engine,
+  security : @snmpv3.Security,
+  keys : @snmpv3.Keys,
+  salt : Bytes,
+) -> Bytes raise {
+  let varbinds : Array[@pdu.VarBind] = [
+    @pdu.VarBind::new(@oid.Oid::parse("1.3.6.1.2.1.1.1.0"), @ber.BerValue::Null),
+    @pdu.VarBind::new(@oid.Oid::parse("1.3.6.1.2.1.1.5.0"), @ber.BerValue::Null),
+  ]
+  let message : @snmpv3.V3Message = {
+    msg_id: 7,
+    msg_max_size: @snmpv3.DEFAULT_MAX_SIZE,
+    flags: @snmpv3.MsgFlags::of(@snmpv3.AuthPriv),
+    security_model: @snmpv3.USM_SECURITY_MODEL,
+    engine,
+    user: b"fuzz",
+    auth_params: b"",
+    priv_params: b"",
+    data: @snmpv3.Plain({
+      context_engine_id: engine.id,
+      context_name: b"",
+      pdu: @pdu.Pdu::request(@pdu.GetRequest, 42, varbinds),
+    }),
+  }
+  @snmpv3.seal(message, security, keys, salt)
 }
