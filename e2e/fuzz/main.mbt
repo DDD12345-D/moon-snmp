@@ -199,9 +199,12 @@ fn main {
     rounds = rounds + 1
   }
 
-  // And on mutations of a genuinely sealed message. Mutating the
-  // ciphertext keeps the envelope intact, so the changes reach the
-  // decryption and PDU parsing instead of dying at the outer tag.
+  // And on mutations of a genuinely sealed message. These do not reach
+  // the decryption — `open` verifies before it decrypts, and a changed
+  // byte fails the authenticator — so the group below is the one that
+  // covers that. What these do reach is the decoder and the TLV walk
+  // that finds the authenticator, which is their point: a corrupted
+  // envelope has to be refused, not crash on the way there.
   let envelope = seal_sample(engine, security, keys, salt) catch {
     _ => abort("the sample message would not seal")
   }
