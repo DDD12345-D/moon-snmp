@@ -27,9 +27,12 @@ fn main {
   let settings : Settings = {
     port: cli.number(2, 162),
     community: @utf8.encode(cli.text(3, "public")),
-    // A default that lets the program be run and finish on its own,
-    // which is what makes it usable in a test as well as by hand.
-    idle_timeout_ms: cli.number(4, 30000),
+    // Seconds, the same unit the v3 listener takes. The two programs do
+    // the same job, so an argument should not mean two different things
+    // in them; milliseconds stay internal because that is what `recv`
+    // wants. The default lets the program be run and finish on its own,
+    // which is what makes it usable by hand as well as in a test.
+    idle_timeout_ms: cli.number(4, 30) * 1000,
   }
   println(
     "listening on udp/\{settings.port} for community \"\{@utf8.decode_lossy(settings.community)}\"",
